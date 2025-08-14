@@ -9,18 +9,24 @@ class PopupController {
     this.loadSequence();
     this.loadPrediction();
     this.loadModelInfo();
+    this.loadPauseState();
     this.setupEventListeners();
     this.startPeriodicUpdates();
   }
 
   private setupEventListeners(): void {
     const clearBtn = document.getElementById('clearBtn') as HTMLButtonElement;
+    const toggleBtn = document.getElementById('toggleBtn') as HTMLButtonElement;
     const devModeBtn = document.getElementById('devModeBtn') as HTMLButtonElement;
     const closeDev = document.getElementById('closeDev') as HTMLButtonElement;
     const exportBtn = document.getElementById('exportDataBtn') as HTMLButtonElement;
 
     clearBtn.addEventListener('click', () => {
       this.clearSequence();
+    });
+
+    toggleBtn.addEventListener('click', () => {
+      this.togglePause();
     });
 
     devModeBtn.addEventListener('click', () => {
@@ -92,11 +98,59 @@ class PopupController {
     });
   }
 
+  private loadPauseState(): void {
+    chrome.runtime.sendMessage({ type: 'getPauseState' }, (response) => {
+      if (chrome.runtime.lastError) {
+        console.error('Failed to load pause state:', chrome.runtime.lastError.message);
+        return;
+      }
+      this.updatePauseUI(response?.isPaused || false);
+    });
+  }
+
+  private togglePause(): void {
+    chrome.runtime.sendMessage({ type: 'togglePause' }, (response) => {
+      if (chrome.runtime.lastError) {
+        console.error('Failed to toggle pause:', chrome.runtime.lastError.message);
+        return;
+      }
+      if (response) {
+        this.updatePauseUI(response.isPaused);
+        console.log(`Extension ${response.isPaused ? 'paused' : 'resumed'}`);
+      }
+    });
+  }
+
+  private updatePauseUI(isPaused: boolean): void {
+    const toggleBtn = document.getElementById('toggleBtn') as HTMLButtonElement;
+    const statusElement = document.getElementById('status');
+    const statusText = document.getElementById('statusText');
+    const statusDot = statusElement?.querySelector('.status-dot');
+
+    if (toggleBtn) {
+      toggleBtn.textContent = isPaused ? 'Resume' : 'Pause';
+      toggleBtn.className = isPaused ? 'btn btn-primary' : 'btn btn-secondary';
+    }
+
+    if (statusElement) {
+      statusElement.className = isPaused ? 'status paused' : 'status capturing';
+    }
+
+    if (statusText) {
+      statusText.textContent = isPaused ? 'Extension paused' : 'Capturing events...';
+    }
+
+    if (statusDot) {
+      statusDot.className = isPaused ? 'status-dot paused' : 'status-dot';
+    }
+  }
+
   private startPeriodicUpdates(): void {
     // Update prediction and model info every 5 seconds
     this.updateInterval = window.setInterval(() => {
       this.loadPrediction();
       this.loadModelInfo();
+      this.loadPauseState(); // Also update pause state
     }, 5000);
   }
 

@@ -20,10 +20,14 @@
 // we'll inline all the necessary code here to avoid import statements
 
 const SEQUENCE_STORAGE_KEY = 'globalActionSequence';
+const PAUSE_STATE_KEY = 'extensionPaused';
 
 // Training and prediction configuration
 const TRAINING_INTERVAL = 50; // Train every 50 events
 const MIN_TRAINING_EVENTS = 20; // Minimum events needed for training
+
+// Extension pause state
+let isPaused = false;
 
 // Simplified tokenizer without external dependencies
 class SimpleEventTokenizer {
@@ -298,6 +302,12 @@ const predictor = new SimpleSequencePredictor();
  * @param event The enriched event to add.
  */
 async function addEventToSequence(event: EnrichedEvent): Promise<void> {
+  // Skip if extension is paused
+  if (isPaused) {
+    console.log('[Synapse] Event ignored - extension is paused');
+    return;
+  }
+
   try {
     const result = await new Promise<{ [key: string]: any }>(resolve => {
       chrome.storage.session.get([SEQUENCE_STORAGE_KEY], resolve);
@@ -433,6 +443,20 @@ chrome.runtime.onMessage.addListener((message: RawUserAction | { type: string },
     return true; // Indicate async response
   }
 
+  if (message.type === 'togglePause') {
+    isPaused = !isPaused;
+    chrome.storage.session.set({ [PAUSE_STATE_KEY]: isPaused }, () => {
+      console.log(`[Synapse] Extension ${isPaused ? 'paused' : 'resumed'}`);
+      sendResponse({ isPaused: isPaused });
+    });
+    return true; // Indicate async response
+  }
+
+  if (message.type === 'getPauseState') {
+    sendResponse({ isPaused: isPaused });
+    return true; // Indicate async response
+  }
+
   return false; // No async response
 });
 
@@ -499,16 +523,33 @@ chrome.tabs.onRemoved.addListener(async (tabId, removeInfo) => {
   await addEventToSequence(event);
 });
 
+// Initialize pause state from storage
+async function initializePauseState(): Promise<void> {
+  try {
+    const result = await chrome.storage.session.get([PAUSE_STATE_KEY]);
+    isPaused = result[PAUSE_STATE_KEY] || false;
+    console.log(`[Synapse] Pause state initialized: ${isPaused ? 'paused' : 'active'}`);
+  } catch (error) {
+    console.error('[Synapse] Error initializing pause state:', error);
+    isPaused = false;
+  }
+}
+
 console.log('[Synapse] Background script loaded and ready.');
+
+// Initialize pause state
+initializePauseState();
 
 // Initialize storage on startup
 chrome.runtime.onStartup.addListener(() => {
   chrome.storage.session.set({ [SEQUENCE_STORAGE_KEY]: [] });
   console.log('[Synapse] New browser session started. Sequence cleared.');
+  initializePauseState();
 });
 
 // Initialize storage on install
 chrome.runtime.onInstalled.addListener(() => {
   chrome.storage.session.set({ [SEQUENCE_STORAGE_KEY]: [] });
   console.log('[Synapse] Extension installed. Sequence storage initialized.');
+  initializePauseState();
 });
