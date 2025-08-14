@@ -17,6 +17,7 @@ class PopupController {
     const clearBtn = document.getElementById('clearBtn') as HTMLButtonElement;
     const devModeBtn = document.getElementById('devModeBtn') as HTMLButtonElement;
     const closeDev = document.getElementById('closeDev') as HTMLButtonElement;
+    const exportBtn = document.getElementById('exportDataBtn') as HTMLButtonElement;
 
     clearBtn.addEventListener('click', () => {
       this.clearSequence();
@@ -28,6 +29,10 @@ class PopupController {
 
     closeDev.addEventListener('click', () => {
       this.toggleDevMode();
+    });
+
+    exportBtn?.addEventListener('click', () => {
+      this.exportAllData();
     });
 
     // Developer mode tab switching
@@ -362,6 +367,150 @@ class PopupController {
       lastEvent: this.sequence.length > 0 ? this.sequence[this.sequence.length - 1].timestamp : null,
       avgEventsPerMinute: recentEvents.length / 60
     };
+  }
+
+  private async exportAllData(): Promise<void> {
+    try {
+      console.log('[Synapse] Starting data export...');
+
+      // Collect all data
+      const exportData = {
+        exportInfo: {
+          timestamp: new Date().toISOString(),
+          version: '1.0.0',
+          userAgent: navigator.userAgent,
+          description: 'Complete Synapse extension data export for debugging'
+        },
+        
+        // Current session data
+        eventSequence: this.sequence,
+        sequenceStats: {
+          totalEvents: this.sequence.length,
+          eventTypeDistribution: this.getEventTypeDistribution(),
+          recentActivity: this.getRecentActivity()
+        },
+
+        // Get all stored data
+        sessionStorage: await this.getSessionStorageData(),
+        localStorage: await this.getLocalStorageData(),
+        
+        // Model information
+        modelInfo: await this.getModelInfoData(),
+        
+        // Runtime information
+        runtimeInfo: {
+          popupLoadTime: new Date().toISOString(),
+          updateIntervalActive: this.updateInterval !== null
+        }
+      };
+
+      // Create downloadable file
+      const jsonString = JSON.stringify(exportData, null, 2);
+      const blob = new Blob([jsonString], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+
+      // Generate filename with timestamp
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+      const filename = `synapse-debug-data-${timestamp}.json`;
+
+      // Create download link and trigger download
+      const downloadLink = document.createElement('a');
+      downloadLink.href = url;
+      downloadLink.download = filename;
+      downloadLink.style.display = 'none';
+      
+      document.body.appendChild(downloadLink);
+      downloadLink.click();
+      document.body.removeChild(downloadLink);
+      
+      // Clean up
+      URL.revokeObjectURL(url);
+      
+      console.log(`[Synapse] Data exported successfully as ${filename}`);
+      
+      // Show success message
+      this.showExportMessage('Data exported successfully!', 'success');
+
+    } catch (error) {
+      console.error('[Synapse] Error exporting data:', error);
+      this.showExportMessage('Export failed. Check console for details.', 'error');
+    }
+  }
+
+  private async getSessionStorageData(): Promise<any> {
+    return new Promise((resolve) => {
+      chrome.storage.session.get(null, (data) => {
+        resolve(data);
+      });
+    });
+  }
+
+  private async getLocalStorageData(): Promise<any> {
+    return new Promise((resolve) => {
+      chrome.storage.local.get(null, (data) => {
+        resolve(data);
+      });
+    });
+  }
+
+  private async getModelInfoData(): Promise<any> {
+    return new Promise((resolve) => {
+      chrome.runtime.sendMessage({ type: 'getModelInfo' }, (response) => {
+        chrome.runtime.sendMessage({ type: 'getCodebookInfo' }, (codebookResponse) => {
+          chrome.runtime.sendMessage({ type: 'getPrediction' }, (predictionResponse) => {
+            resolve({
+              modelInfo: response?.modelInfo,
+              isReady: response?.isReady,
+              codebookInfo: codebookResponse?.codebookInfo,
+              lastPrediction: predictionResponse?.prediction
+            });
+          });
+        });
+      });
+    });
+  }
+
+  private showExportMessage(message: string, type: 'success' | 'error'): void {
+    // Create temporary message element
+    const messageDiv = document.createElement('div');
+    messageDiv.style.cssText = `
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      padding: 12px 16px;
+      border-radius: 4px;
+      font-size: 14px;
+      font-weight: 500;
+      z-index: 10000;
+      animation: slideIn 0.3s ease-out;
+      ${type === 'success' 
+        ? 'background: #e8f5e8; color: #2d5016; border: 1px solid #34a853;' 
+        : 'background: #fce8e6; color: #d93025; border: 1px solid #ea4335;'
+      }
+    `;
+    messageDiv.textContent = message;
+
+    // Add slide-in animation
+    const style = document.createElement('style');
+    style.textContent = `
+      @keyframes slideIn {
+        from { transform: translateX(100%); opacity: 0; }
+        to { transform: translateX(0); opacity: 1; }
+      }
+    `;
+    document.head.appendChild(style);
+
+    document.body.appendChild(messageDiv);
+
+    // Remove after 3 seconds
+    setTimeout(() => {
+      if (messageDiv.parentNode) {
+        messageDiv.parentNode.removeChild(messageDiv);
+      }
+      if (style.parentNode) {
+        style.parentNode.removeChild(style);
+      }
+    }, 3000);
   }
 }
 
