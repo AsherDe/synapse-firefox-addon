@@ -9,7 +9,7 @@
 // The core structure for any event message sent from a content script
 interface RawUserAction {
   type: 'user_action_click' | 'user_action_keydown';
-  payload: UserActionClickPayload | UserActionKeydownPayload;
+  payload: UserActionClickPayload | UserActionKeydownPayload | ExtendedUserActionClickPayload | ExtendedUserActionKeydownPayload;
 }
 
 interface UserActionClickPayload {
@@ -118,3 +118,44 @@ type TokenSequence = TokenizedEvent[];
 
 // Type for the global sequence stored in chrome.storage.session
 type GlobalActionSequence = EnrichedEvent[];
+
+// 泛化事件特征类型
+interface GeneralizedEventFeatures {
+  element_role?: string;    // HTML5 role或语义化标识
+  element_text?: string;    // 按钮或元素文本(归一化)
+  is_nav_link?: boolean;    // 是否为导航链接
+  is_input_field?: boolean; // 是否为输入字段
+  domain?: string;          // 页面域名
+  path_depth?: number;      // URL路径深度
+  page_type?: string;       // 页面类型(启发式判断)
+}
+
+// 扩展的点击事件载荷
+interface ExtendedUserActionClickPayload extends UserActionClickPayload {
+  features: GeneralizedEventFeatures;
+}
+
+// 扩展的按键事件载荷  
+interface ExtendedUserActionKeydownPayload extends UserActionKeydownPayload {
+  features: GeneralizedEventFeatures;
+  modifier_keys?: string[]; // 修饰键组合
+}
+
+// 技能/行为模式类型
+interface ActionSkill {
+  id: string;
+  name: string;
+  description: string;
+  token_sequence: number[];  // 构成该技能的token序列
+  frequency: number;         // 该技能的使用频率
+  confidence: number;        // 技能识别的置信度
+}
+
+// 高层次技能事件
+interface SkillEvent extends BaseEvent {
+  type: 'skill_action';
+  payload: {
+    skill: ActionSkill;
+    original_events: EnrichedEvent[]; // 构成该技能的原始事件
+  };
+}

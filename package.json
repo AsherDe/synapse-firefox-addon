@@ -10,7 +10,7 @@
   },
   "keywords": [
     "browser-extension",
-    "machine-learning", 
+    "machine-learning",
     "user-behavior",
     "tokenization",
     "sequence-prediction",
@@ -26,5 +26,8 @@
     "@types/node": "^20.0.0",
     "typescript": "^5.0.0",
     "web-ext": "^7.0.0"
+  },
+  "dependencies": {
+    "@tensorflow/tfjs": "^4.22.0"
   }
 }
