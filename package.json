@@ -1,0 +1,20 @@
+{
+  "name": "synapse",
+  "version": "1.0.0",
+  "description": "Browser extension for FAST Token processing",
+  "scripts": {
+    "build": "tsc && web-ext build",
+    "start": "web-ext run --target=firefox-desktop",
+    "watch": "tsc --watch"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.268",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0",
+    "web-ext": "^7.0.0"
+  },
+  "dependencies": {
+    "dct": "^0.1.0",
+    "ml-kmeans": "^6.0.0"
+  }
+}
