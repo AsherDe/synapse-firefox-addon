@@ -1,4 +1,4 @@
-import { RawUserAction, UserActionClickPayload, UserActionKeydownPayload } from './types';
+/// <reference path="./types.ts" />
 
 /**
  * A simplified function to generate a CSS selector for a given element.

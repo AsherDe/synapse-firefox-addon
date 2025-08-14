@@ -1,4 +1,4 @@
-import { EnrichedEvent, GlobalActionSequence } from './types';
+/// <reference path="./types.ts" />
 
 class PopupController {
   private sequence: GlobalActionSequence = [];
@@ -10,14 +10,9 @@ class PopupController {
 
   private setupEventListeners(): void {
     const clearBtn = document.getElementById('clearBtn') as HTMLButtonElement;
-    const refreshBtn = document.getElementById('refreshBtn') as HTMLButtonElement;
 
     clearBtn.addEventListener('click', () => {
       this.clearSequence();
-    });
-
-    refreshBtn.addEventListener('click', () => {
-      this.loadSequence();
     });
   }
 
@@ -49,8 +44,8 @@ class PopupController {
   }
 
   private updateSequenceDisplay(): void {
-    const eventCount = document.getElementById('eventCount')!;
-    const eventList = document.getElementById('eventList')!;
+    const eventCount = document.getElementById('tokenCount')!;
+    const eventList = document.getElementById('tokenList')!;
 
     eventCount.textContent = this.sequence.length.toString();
 

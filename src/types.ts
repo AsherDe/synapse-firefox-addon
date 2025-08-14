@@ -5,57 +5,56 @@
  */
 
 // The core structure for any event message sent from a content script
-export interface RawUserAction {
+interface RawUserAction {
   type: 'user_action_click' | 'user_action_keydown';
   payload: UserActionClickPayload | UserActionKeydownPayload;
 }
 
-export interface UserActionClickPayload {
+interface UserActionClickPayload {
   selector: string;
   x: number;
   y: number;
   url: string;
 }
 
-export interface UserActionKeydownPayload {
+interface UserActionKeydownPayload {
   key: string;
   code: string;
   url: string;
 }
 
 // The core structure for any browser-level event captured by the background script
-export interface BrowserAction {
+interface BrowserAction {
   type: 'browser_action_tab_created' | 'browser_action_tab_activated' | 'browser_action_tab_updated' | 'browser_action_tab_removed';
   payload: TabCreatedPayload | TabActivatedPayload | TabUpdatedPayload | TabRemovedPayload;
 }
 
-export interface TabCreatedPayload {
+interface TabCreatedPayload {
   tabId: number;
   windowId: number;
   url?: string;
 }
 
-export interface TabActivatedPayload {
+interface TabActivatedPayload {
   tabId: number;
   windowId: number;
 }
 
-export interface TabUpdatedPayload {
+interface TabUpdatedPayload {
   tabId: number;
   url: string;
   title?: string;
 }
 
-export interface TabRemovedPayload {
+interface TabRemovedPayload {
   tabId: number;
   windowId: number;
 }
 
-
 // The final, enriched event structure that is stored in the global sequence.
 // This is a discriminated union based on the `type` property.
 
-export interface EventContext {
+interface EventContext {
   tabId: number | null;
   windowId: number | null;
   tabInfo?: chrome.tabs.Tab; // Contains URL, title, etc. at the time of the event
@@ -67,38 +66,38 @@ interface BaseEvent {
 }
 
 // Define each event type as a distinct object in the union
-export type UserActionClickEvent = BaseEvent & {
+type UserActionClickEvent = BaseEvent & {
   type: 'user_action_click';
   payload: UserActionClickPayload;
 };
 
-export type UserActionKeydownEvent = BaseEvent & {
+type UserActionKeydownEvent = BaseEvent & {
   type: 'user_action_keydown';
   payload: UserActionKeydownPayload;
 };
 
-export type BrowserActionTabCreatedEvent = BaseEvent & {
+type BrowserActionTabCreatedEvent = BaseEvent & {
   type: 'browser_action_tab_created';
   payload: TabCreatedPayload;
 };
 
-export type BrowserActionTabActivatedEvent = BaseEvent & {
+type BrowserActionTabActivatedEvent = BaseEvent & {
   type: 'browser_action_tab_activated';
   payload: TabActivatedPayload;
 };
 
-export type BrowserActionTabUpdatedEvent = BaseEvent & {
+type BrowserActionTabUpdatedEvent = BaseEvent & {
   type: 'browser_action_tab_updated';
   payload: TabUpdatedPayload;
 };
 
-export type BrowserActionTabRemovedEvent = BaseEvent & {
+type BrowserActionTabRemovedEvent = BaseEvent & {
   type: 'browser_action_tab_removed';
   payload: TabRemovedPayload;
 };
 
 // The EnrichedEvent is a union of all possible specific event types
-export type EnrichedEvent =
+type EnrichedEvent =
   | UserActionClickEvent
   | UserActionKeydownEvent
   | BrowserActionTabCreatedEvent
@@ -107,4 +106,4 @@ export type EnrichedEvent =
   | BrowserActionTabRemovedEvent;
 
 // Type for the global sequence stored in chrome.storage.session
-export type GlobalActionSequence = EnrichedEvent[];
+type GlobalActionSequence = EnrichedEvent[];

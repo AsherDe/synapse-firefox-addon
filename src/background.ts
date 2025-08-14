@@ -1,20 +1,4 @@
-import {
-  EnrichedEvent,
-  GlobalActionSequence,
-  RawUserAction,
-  TabCreatedPayload,
-  TabActivatedPayload,
-  TabUpdatedPayload,
-  TabRemovedPayload,
-  BrowserActionTabActivatedEvent,
-  BrowserActionTabCreatedEvent,
-  BrowserActionTabUpdatedEvent,
-  BrowserActionTabRemovedEvent,
-  UserActionClickEvent,
-  UserActionKeydownEvent,
-  UserActionClickPayload,
-  UserActionKeydownPayload,
-} from './types';
+/// <reference path="./types.ts" />
 
 const SEQUENCE_STORAGE_KEY = 'globalActionSequence';
 
