@@ -7,8 +7,15 @@
     "strict": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "isolatedModules": false
+    "isolatedModules": false,
+    "module": "none"
   },
-  "include": ["src/**/*"],
+  "include": [
+    "src/background-combined.ts",
+    "src/content.ts", 
+    "src/popup.ts",
+    "src/tokenizer.ts",
+    "src/types.ts"
+  ],
   "exclude": ["node_modules", "dist"]
 }

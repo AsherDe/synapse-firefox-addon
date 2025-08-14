@@ -180,6 +180,196 @@
             max-height: 60px;
             overflow-y: auto;
         }
+
+        .prediction-container {
+            background: white;
+            border-radius: 4px;
+            padding: 12px;
+            margin-bottom: 15px;
+            border: 1px solid #dadce0;
+        }
+
+        .prediction-item {
+            padding: 8px;
+            border-radius: 4px;
+            background: #f8f9fa;
+        }
+
+        .prediction-item.recent {
+            background: #e8f5e8;
+            border-left: 3px solid #34a853;
+        }
+
+        .prediction-item.stale {
+            background: #fef7e0;
+            border-left: 3px solid #fbbc04;
+        }
+
+        .prediction-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+
+        .prediction-time {
+            font-size: 11px;
+            color: #5f6368;
+        }
+
+        .confidence {
+            margin-top: 4px;
+        }
+
+        .confidence-bar {
+            display: inline-block;
+            height: 4px;
+            background: #1a73e8;
+            border-radius: 2px;
+            margin-left: 8px;
+        }
+
+        .model-info {
+            background: white;
+            border-radius: 4px;
+            padding: 12px;
+            margin-bottom: 15px;
+            border: 1px solid #dadce0;
+        }
+
+        .model-status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+
+        .status-indicator {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+        }
+
+        .status-indicator.ready {
+            background: #34a853;
+        }
+
+        .status-indicator.loading {
+            background: #fbbc04;
+            animation: pulse 1.5s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .model-details {
+            display: grid;
+            gap: 4px;
+        }
+
+        .model-param {
+            font-size: 12px;
+            color: #5f6368;
+        }
+
+        .dev-mode-panel {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: white;
+            z-index: 1000;
+            overflow-y: auto;
+        }
+
+        .dev-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 16px;
+            border-bottom: 1px solid #dadce0;
+            background: #f8f9fa;
+        }
+
+        .dev-header h3 {
+            margin: 0;
+            color: #3c4043;
+        }
+
+        .btn-close {
+            background: none;
+            border: none;
+            font-size: 20px;
+            cursor: pointer;
+            color: #5f6368;
+            padding: 4px 8px;
+            border-radius: 4px;
+        }
+
+        .btn-close:hover {
+            background: #e8eaed;
+        }
+
+        .dev-tabs {
+            display: flex;
+            background: #f8f9fa;
+            border-bottom: 1px solid #dadce0;
+        }
+
+        .dev-tab {
+            flex: 1;
+            padding: 12px;
+            border: none;
+            background: none;
+            cursor: pointer;
+            color: #5f6368;
+            font-size: 14px;
+        }
+
+        .dev-tab.active {
+            background: white;
+            color: #1a73e8;
+            border-bottom: 2px solid #1a73e8;
+        }
+
+        .dev-tab:hover:not(.active) {
+            background: #e8eaed;
+        }
+
+        .dev-content {
+            display: none;
+            padding: 16px;
+        }
+
+        .dev-content.active {
+            display: block;
+        }
+
+        .dev-section {
+            margin-bottom: 20px;
+        }
+
+        .dev-section h4 {
+            margin: 0 0 8px 0;
+            color: #3c4043;
+            font-size: 14px;
+        }
+
+        .dev-data {
+            background: #f8f9fa;
+            border: 1px solid #dadce0;
+            border-radius: 4px;
+            padding: 12px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            line-height: 1.4;
+            max-height: 200px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+        }
     </style>
 </head>
 <body>
@@ -191,6 +381,22 @@
     <div class="controls">
         <button id="toggleBtn" class="btn btn-primary">Pause</button>
         <button id="clearBtn" class="btn btn-secondary">Clear</button>
+        <button id="devModeBtn" class="btn btn-secondary">Dev Mode</button>
+    </div>
+
+    <div class="model-info">
+        <div id="modelInfo">
+            <div class="model-status">
+                <div class="status-indicator loading"></div>
+                <span>Model Loading...</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="prediction-container">
+        <div id="predictionInfo">
+            <div class="empty-state">No prediction available yet</div>
+        </div>
     </div>
     
     <div id="status" class="status capturing">
@@ -213,6 +419,60 @@
         
         <div id="sequenceDisplay" class="sequence-display" style="display: none;">
             <strong>Token Sequence:</strong> <span id="tokenSequence"></span>
+        </div>
+    </div>
+
+    <div id="devModePanel" class="dev-mode-panel" style="display: none;">
+        <div class="dev-header">
+            <h3>Developer Mode</h3>
+            <button id="closeDev" class="btn-close">×</button>
+        </div>
+        
+        <div class="dev-tabs">
+            <button class="dev-tab active" data-tab="events">Events</button>
+            <button class="dev-tab" data-tab="tokens">Tokens</button>
+            <button class="dev-tab" data-tab="model">Model</button>
+            <button class="dev-tab" data-tab="debug">Debug</button>
+        </div>
+
+        <div id="dev-events" class="dev-content active">
+            <div class="dev-section">
+                <h4>Raw Events</h4>
+                <div id="rawEvents" class="dev-data"></div>
+            </div>
+        </div>
+
+        <div id="dev-tokens" class="dev-content">
+            <div class="dev-section">
+                <h4>Token Statistics</h4>
+                <div id="tokenStats" class="dev-data"></div>
+            </div>
+            <div class="dev-section">
+                <h4>Codebook Status</h4>
+                <div id="codebookInfo" class="dev-data"></div>
+            </div>
+        </div>
+
+        <div id="dev-model" class="dev-content">
+            <div class="dev-section">
+                <h4>Model Architecture</h4>
+                <div id="modelArchitecture" class="dev-data"></div>
+            </div>
+            <div class="dev-section">
+                <h4>Training History</h4>
+                <div id="trainingHistory" class="dev-data"></div>
+            </div>
+        </div>
+
+        <div id="dev-debug" class="dev-content">
+            <div class="dev-section">
+                <h4>Debug Console</h4>
+                <div id="debugConsole" class="dev-data"></div>
+            </div>
+            <div class="dev-section">
+                <h4>Storage Info</h4>
+                <div id="storageInfo" class="dev-data"></div>
+            </div>
         </div>
     </div>
     

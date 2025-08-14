@@ -2,6 +2,8 @@
  * This file contains the shared type definitions for the Synapse extension.
  * These types are used for communication between content scripts, the background script,
  * and the popup UI.
+ * 
+ * Licensed under the Apache License, Version 2.0
  */
 
 // The core structure for any event message sent from a content script
@@ -104,6 +106,15 @@ type EnrichedEvent =
   | BrowserActionTabActivatedEvent
   | BrowserActionTabUpdatedEvent
   | BrowserActionTabRemovedEvent;
+
+// Token-related types
+interface TokenizedEvent {
+  tokenId: number;
+  timestamp: number;
+  originalEvent: EnrichedEvent;
+}
+
+type TokenSequence = TokenizedEvent[];
 
 // Type for the global sequence stored in chrome.storage.session
 type GlobalActionSequence = EnrichedEvent[];
