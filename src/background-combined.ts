@@ -375,6 +375,10 @@ class SkillDetector {
 // Extension pause state
 let isPaused = false;
 
+// A/B Test variables
+let isUserInTestGroup = false;
+let abTestInitialized = false;
+
 // IndexedDB Manager initialization
 let dbManager: any = null;
 
@@ -1014,6 +1018,35 @@ async function handleMLOperations(currentSequence: GlobalActionSequence): Promis
       if (matchedSkill) {
         console.log(`[Synapse] Detected skill pattern: ${matchedSkill.name} (confidence: ${(matchedSkill.confidence * 100).toFixed(1)}%)`);
         
+        // A/B Test: Show intelligent predictions to test group users
+        if (abTestInitialized && isUserInTestGroup && matchedSkill.confidence > 0.7) {
+          try {
+            chrome.notifications.create(`synapse_prediction_${Date.now()}`, {
+              type: 'basic',
+              iconUrl: 'icons/icon-48.png',
+              title: 'Synapse 智能预测',
+              message: `检测到您可能正在执行: ${matchedSkill.name}. 需要我帮您继续吗?`
+            });
+            
+            // Record this prediction event for analysis
+            const predictionEvent = {
+              type: 'internal_action_prediction_shown',
+              payload: { 
+                skillName: matchedSkill.name, 
+                confidence: matchedSkill.confidence,
+                userGroup: 'test'
+              },
+              timestamp: Date.now(),
+              context: { tabId: null, windowId: null }
+            } as any;
+            
+            await addEventToSequence(predictionEvent);
+            
+          } catch (error) {
+            console.warn('[Synapse] Failed to show prediction notification:', error);
+          }
+        }
+        
         // Store skill prediction
         chrome.storage.session.set({
           lastPrediction: {
@@ -1021,7 +1054,8 @@ async function handleMLOperations(currentSequence: GlobalActionSequence): Promis
             skillDescription: matchedSkill.description,
             confidence: matchedSkill.confidence,
             timestamp: Date.now(),
-            type: 'skill'
+            type: 'skill',
+            userGroup: isUserInTestGroup ? 'test' : 'control'
           }
         });
       }
@@ -1608,6 +1642,29 @@ async function initializePauseState(): Promise<void> {
   }
 }
 
+// Initialize A/B test assignment
+async function initializeABTest(): Promise<void> {
+  try {
+    const result = await chrome.storage.local.get(['ab_test_group']);
+    if (result.ab_test_group) {
+      // User already assigned to a group
+      isUserInTestGroup = result.ab_test_group === 'test';
+      console.log(`[Synapse] User in existing A/B test group: ${result.ab_test_group}`);
+    } else {
+      // First time user - randomly assign to test or control group
+      isUserInTestGroup = Math.random() < 0.5;
+      const group = isUserInTestGroup ? 'test' : 'control';
+      await chrome.storage.local.set({ 'ab_test_group': group });
+      console.log(`[Synapse] User assigned to A/B test group: ${group}`);
+    }
+    abTestInitialized = true;
+  } catch (error) {
+    console.error('[Synapse] Error initializing A/B test:', error);
+    isUserInTestGroup = false;
+    abTestInitialized = true;
+  }
+}
+
 console.log('[Synapse] Background script loaded and ready.');
 
 // Initialize IndexedDB first
@@ -1615,6 +1672,9 @@ initializeDatabase();
 
 // Initialize pause state
 initializePauseState();
+
+// Initialize A/B test
+initializeABTest();
 
 // Phase 2.1: Initialize Chrome Idle API
 initializeIdleDetection();

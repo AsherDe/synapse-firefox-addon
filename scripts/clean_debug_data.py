@@ -47,17 +47,27 @@ class SynapseDataCleaner:
         payload = event.get('payload', {})
         features = payload.get('features', {})
         
+        # 增加对modifier_keys的处理
+        modifier_keys = payload.get('modifier_keys', [])
+        
         return {
             'action_subtype': event['type'].replace('user_action_', ''),
             'element_role': features.get('element_role'),
-            'element_text': features.get('element_text', '')[:100],  # 限制长度
+            'element_text': str(features.get('element_text', ''))[:100],
             'is_nav_link': features.get('is_nav_link'),
             'is_input_field': features.get('is_input_field'),
             'page_type': features.get('page_type'),
             'path_depth': features.get('path_depth'),
             'x_coord': payload.get('x'),
             'y_coord': payload.get('y'),
-            'selector': payload.get('selector', '')[:200],  # 限制长度
+            'selector': str(payload.get('selector', ''))[:200],
+            # --- 新增特征 ---
+            'is_ctrl_key': 'ctrl' in modifier_keys,
+            'is_shift_key': 'shift' in modifier_keys,
+            'is_alt_key': 'alt' in modifier_keys,
+            'key_char': payload.get('key') if event['type'] == 'user_action_keydown' else None,
+            'input_duration': payload.get('duration') if event['type'] == 'user_action_text_input' else None,
+            'input_method': payload.get('input_method') if event['type'] == 'user_action_text_input' else None
         }
     
     def _extract_browser_action_features(self, event: Dict[str, Any]) -> Dict[str, Any]:
