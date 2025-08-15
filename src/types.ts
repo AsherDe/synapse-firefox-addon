@@ -8,8 +8,8 @@
 
 // The core structure for any event message sent from a content script
 interface RawUserAction {
-  type: 'user_action_click' | 'user_action_keydown' | 'user_action_text_input';
-  payload: UserActionClickPayload | UserActionKeydownPayload | UserActionTextInputPayload | ExtendedUserActionClickPayload | ExtendedUserActionKeydownPayload;
+  type: 'user_action_click' | 'user_action_keydown' | 'user_action_text_input' | 'user_action_scroll' | 'user_action_mouse_pattern' | 'user_action_form_submit' | 'user_action_focus_change' | 'user_action_page_visibility' | 'user_action_mouse_hover' | 'user_action_clipboard';
+  payload: UserActionClickPayload | UserActionKeydownPayload | UserActionTextInputPayload | ExtendedUserActionClickPayload | ExtendedUserActionKeydownPayload | UserActionScrollPayload | UserActionMousePatternPayload | UserActionFormSubmitPayload | UserActionFocusChangePayload | UserActionPageVisibilityPayload | UserActionMouseHoverPayload | UserActionClipboardPayload;
 }
 
 interface UserActionClickPayload {
@@ -32,6 +32,80 @@ interface UserActionTextInputPayload {
   input_method?: string; // 'keyboard', 'ime', 'paste', etc.
   features: GeneralizedEventFeatures;
   duration?: number; // 输入持续时间(毫秒)
+}
+
+interface UserActionScrollPayload {
+  url: string;
+  features: {
+    scroll_direction: string;
+    scroll_position: number;
+    page_height: number;
+    viewport_height: number;
+    scroll_percentage: number;
+    domain: string;
+    page_type: string;
+  };
+  timestamp: number;
+}
+
+interface UserActionMousePatternPayload {
+  url: string;
+  features: {
+    pattern_type: string;
+    movement_speed: number;
+    direction_changes: number;
+    total_distance: number;
+    significance: number;
+    domain: string;
+    page_type: string;
+  };
+  trail: {x: number, y: number, timestamp: number}[];
+  timestamp: number;
+}
+
+interface UserActionFormSubmitPayload {
+  form_selector: string;
+  url: string;
+  features: GeneralizedEventFeatures;
+  field_count?: number;
+  has_required_fields?: boolean;
+  submit_method?: string;
+}
+
+interface UserActionFocusChangePayload {
+  from_selector?: string;
+  to_selector?: string;
+  url: string;
+  features: GeneralizedEventFeatures;
+  focus_type: 'gained' | 'lost' | 'switched';
+}
+
+interface UserActionPageVisibilityPayload {
+  url: string;
+  visibility_state: 'visible' | 'hidden';
+  previous_state?: string;
+  features: {
+    domain: string;
+    page_type: string;
+    time_on_page?: number;
+  };
+}
+
+interface UserActionMouseHoverPayload {
+  selector: string;
+  url: string;
+  features: GeneralizedEventFeatures;
+  hover_duration?: number;
+  x: number;
+  y: number;
+}
+
+interface UserActionClipboardPayload {
+  operation: 'copy' | 'cut' | 'paste';
+  url: string;
+  features: GeneralizedEventFeatures;
+  text_length?: number;
+  has_formatting?: boolean;
 }
 
 // The core structure for any browser-level event captured by the background script
@@ -92,6 +166,41 @@ type UserActionTextInputEvent = BaseEvent & {
   payload: UserActionTextInputPayload;
 };
 
+type UserActionScrollEvent = BaseEvent & {
+  type: 'user_action_scroll';
+  payload: UserActionScrollPayload;
+};
+
+type UserActionMousePatternEvent = BaseEvent & {
+  type: 'user_action_mouse_pattern';
+  payload: UserActionMousePatternPayload;
+};
+
+type UserActionFormSubmitEvent = BaseEvent & {
+  type: 'user_action_form_submit';
+  payload: UserActionFormSubmitPayload;
+};
+
+type UserActionFocusChangeEvent = BaseEvent & {
+  type: 'user_action_focus_change';
+  payload: UserActionFocusChangePayload;
+};
+
+type UserActionPageVisibilityEvent = BaseEvent & {
+  type: 'user_action_page_visibility';
+  payload: UserActionPageVisibilityPayload;
+};
+
+type UserActionMouseHoverEvent = BaseEvent & {
+  type: 'user_action_mouse_hover';
+  payload: UserActionMouseHoverPayload;
+};
+
+type UserActionClipboardEvent = BaseEvent & {
+  type: 'user_action_clipboard';
+  payload: UserActionClipboardPayload;
+};
+
 type BrowserActionTabCreatedEvent = BaseEvent & {
   type: 'browser_action_tab_created';
   payload: TabCreatedPayload;
@@ -117,6 +226,13 @@ type EnrichedEvent =
   | UserActionClickEvent
   | UserActionKeydownEvent
   | UserActionTextInputEvent
+  | UserActionScrollEvent
+  | UserActionMousePatternEvent
+  | UserActionFormSubmitEvent
+  | UserActionFocusChangeEvent
+  | UserActionPageVisibilityEvent
+  | UserActionMouseHoverEvent
+  | UserActionClipboardEvent
   | BrowserActionTabCreatedEvent
   | BrowserActionTabActivatedEvent
   | BrowserActionTabUpdatedEvent

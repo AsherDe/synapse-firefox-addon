@@ -1,9 +1,8 @@
 /// <reference path="./types.ts" />
 
 /**
- * A simplified function to generate a CSS selector for a given element.
- * Tries to use ID, then classes, then falls back to tag name.
- * This is a basic implementation for demonstration purposes.
+ * Optimized function to generate a stable CSS selector for a given element.
+ * Prioritizes stable attributes and limits depth for performance.
  * @param el The element to generate a selector for.
  * @returns A CSS selector string.
  */
@@ -11,15 +10,74 @@ function getCssSelector(el: HTMLElement): string {
   if (!(el instanceof Element)) {
     return 'unknown';
   }
-  if (el.id) {
-    return `#${el.id}`;
+
+  // Selector generation with performance optimizations
+  const selectorParts: string[] = [];
+  let currentElement = el as Element;
+  let depth = 0;
+  const maxDepth = 5; // Limit depth for performance
+
+  while (currentElement && currentElement !== document.body && depth < maxDepth) {
+    let selector = '';
+
+    // Priority 1: data-testid for stable test attributes
+    const testId = currentElement.getAttribute('data-testid') || currentElement.getAttribute('data-test');
+    if (testId) {
+      return `[data-testid="${testId}"]`;
+    }
+
+    // Priority 2: Unique ID
+    if (currentElement.id) {
+      return `#${currentElement.id}`;
+    }
+
+    // Priority 3: Stable attributes (aria-label, role, name)
+    const ariaLabel = currentElement.getAttribute('aria-label');
+    const role = currentElement.getAttribute('role');
+    const name = currentElement.getAttribute('name');
+    
+    if (ariaLabel && ariaLabel.length < 30) {
+      return `[aria-label="${ariaLabel}"]`;
+    }
+    
+    if (role && ['button', 'link', 'textbox', 'checkbox', 'radio'].includes(role)) {
+      selector = `[role="${role}"]`;
+    } else if (name && name.length < 20) {
+      selector = `[name="${name}"]`;
+    } else {
+      // Fallback to tag name
+      selector = currentElement.tagName.toLowerCase();
+
+      // Add class if meaningful and short
+      if (currentElement.className && typeof currentElement.className === 'string') {
+        const classes = currentElement.className.split(' ')
+          .filter(cls => cls.length > 0 && cls.length < 20 && !cls.startsWith('_')) // Filter out generated classes
+          .slice(0, 2); // Limit to 2 classes for performance
+        
+        if (classes.length > 0) {
+          selector += '.' + classes.join('.');
+        }
+      }
+
+      // Add position if needed for disambiguation (performance optimization)
+      const siblings = Array.from(currentElement.parentElement?.children || [])
+        .filter(sibling => sibling.tagName === currentElement.tagName);
+      
+      if (siblings.length > 1) {
+        const index = siblings.indexOf(currentElement) + 1;
+        selector += `:nth-of-type(${index})`;
+      }
+    }
+
+    selectorParts.unshift(selector);
+
+    // Move up the DOM tree
+    currentElement = currentElement.parentElement as Element;
+    depth++;
   }
-  if (el.className && typeof el.className === 'string') {
-    // Return the first class name, simplified
-    const firstClass = el.className.split(' ')[0];
-    return `${el.tagName.toLowerCase()}.${firstClass}`;
-  }
-  return el.tagName.toLowerCase();
+
+  // Return the most specific selector we found
+  return selectorParts.length > 0 ? selectorParts.join(' > ') : 'unknown';
 }
 
 /**
@@ -353,33 +411,319 @@ class TextInputAggregator {
 const textInputAggregator = new TextInputAggregator();
 
 /**
+ * Event throttling utility to prevent overwhelming the background script
+ */
+class EventThrottler {
+  private lastEventTime: number = 0;
+  private eventQueue: Array<{event: any, callback: () => void}> = [];
+  private throttleTimer: number | null = null;
+  private readonly MIN_EVENT_INTERVAL = 50; // 50ms minimum between events
+  private readonly MAX_QUEUE_SIZE = 20;
+
+  public throttleEvent(event: any, callback: () => void): void {
+    const now = Date.now();
+    const timeSinceLastEvent = now - this.lastEventTime;
+
+    // If enough time has passed, send immediately
+    if (timeSinceLastEvent >= this.MIN_EVENT_INTERVAL && this.eventQueue.length === 0) {
+      this.lastEventTime = now;
+      callback();
+      return;
+    }
+
+    // Add to queue
+    this.eventQueue.push({ event, callback });
+    
+    // Limit queue size to prevent memory issues
+    if (this.eventQueue.length > this.MAX_QUEUE_SIZE) {
+      this.eventQueue.shift(); // Remove oldest event
+    }
+
+    // Process queue if not already scheduled
+    if (this.throttleTimer === null) {
+      this.scheduleQueueProcessing();
+    }
+  }
+
+  private scheduleQueueProcessing(): void {
+    const timeUntilNext = Math.max(0, this.MIN_EVENT_INTERVAL - (Date.now() - this.lastEventTime));
+    
+    this.throttleTimer = window.setTimeout(() => {
+      this.processQueue();
+    }, timeUntilNext);
+  }
+
+  private processQueue(): void {
+    if (this.eventQueue.length === 0) {
+      this.throttleTimer = null;
+      return;
+    }
+
+    // Process the oldest event
+    const { callback } = this.eventQueue.shift()!;
+    this.lastEventTime = Date.now();
+    callback();
+
+    // Schedule next processing if queue is not empty
+    if (this.eventQueue.length > 0) {
+      this.scheduleQueueProcessing();
+    } else {
+      this.throttleTimer = null;
+    }
+  }
+}
+
+const eventThrottler = new EventThrottler();
+
+/**
+ * Advanced throttling utility for high-frequency events like scroll and mousemove
+ */
+class AdvancedEventThrottler {
+  private throttleTimers: Map<string, number> = new Map();
+  private debounceTimers: Map<string, number> = new Map();
+  
+  /**
+   * Throttle function - executes at most once per interval
+   */
+  public throttle(key: string, func: () => void, delay: number): void {
+    if (!this.throttleTimers.has(key)) {
+      func();
+      this.throttleTimers.set(key, window.setTimeout(() => {
+        this.throttleTimers.delete(key);
+      }, delay));
+    }
+  }
+  
+  /**
+   * Debounce function - executes only after delay has passed since last call
+   */
+  public debounce(key: string, func: () => void, delay: number): void {
+    const existingTimer = this.debounceTimers.get(key);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+    }
+    
+    const timer = window.setTimeout(() => {
+      func();
+      this.debounceTimers.delete(key);
+    }, delay);
+    
+    this.debounceTimers.set(key, timer);
+  }
+  
+  /**
+   * Clear all timers (useful for cleanup)
+   */
+  public cleanup(): void {
+    this.throttleTimers.forEach(timer => clearTimeout(timer));
+    this.debounceTimers.forEach(timer => clearTimeout(timer));
+    this.throttleTimers.clear();
+    this.debounceTimers.clear();
+  }
+}
+
+const advancedThrottler = new AdvancedEventThrottler();
+
+/**
+ * Monitor scroll behavior with throttling
+ */
+function setupScrollMonitoring(): void {
+  let lastScrollTop = 0;
+  let scrollDirection = 'none';
+  
+  document.addEventListener('scroll', (event) => {
+    advancedThrottler.throttle('scroll', () => {
+      const currentScrollTop = window.pageYOffset || document.documentElement.scrollTop;
+      const newDirection = currentScrollTop > lastScrollTop ? 'down' : 'up';
+      
+      // Only send events when scroll direction changes or significant scroll distance
+      if (newDirection !== scrollDirection || Math.abs(currentScrollTop - lastScrollTop) > 200) {
+        scrollDirection = newDirection;
+        
+        const features = {
+          scroll_direction: newDirection,
+          scroll_position: currentScrollTop,
+          page_height: document.documentElement.scrollHeight,
+          viewport_height: window.innerHeight,
+          scroll_percentage: (currentScrollTop / (document.documentElement.scrollHeight - window.innerHeight)) * 100,
+          domain: window.location.hostname,
+          page_type: inferPageType(window.location.href)
+        };
+        
+        // Send scroll event to background (less frequently than other events)
+        eventThrottler.throttleEvent(event, () => {
+          const message = {
+            type: 'user_action_scroll',
+            payload: {
+              url: window.location.href,
+              features: features,
+              timestamp: Date.now()
+            }
+          };
+          
+          // Only send if this is a significant scroll action
+          chrome.runtime.sendMessage(message);
+        });
+        
+        lastScrollTop = currentScrollTop;
+      }
+    }, 250); // Throttle scroll events to at most 4 times per second
+  }, { passive: true });
+}
+
+/**
+ * Monitor mouse movement patterns with debouncing
+ */
+function setupMouseMoveMonitoring(): void {
+  let mouseTrail: {x: number, y: number, timestamp: number}[] = [];
+  const maxTrailLength = 5;
+  
+  document.addEventListener('mousemove', (event) => {
+    // Use debounce to only process mouse movement after user stops moving for a moment
+    advancedThrottler.debounce('mousemove', () => {
+      // Add to trail
+      mouseTrail.push({
+        x: event.clientX,
+        y: event.clientY,
+        timestamp: Date.now()
+      });
+      
+      // Keep trail size limited
+      if (mouseTrail.length > maxTrailLength) {
+        mouseTrail.shift();
+      }
+      
+      // Analyze mouse movement pattern
+      if (mouseTrail.length >= 3) {
+        const pattern = analyzeMousePattern(mouseTrail);
+        
+        // Only send meaningful mouse patterns
+        if (pattern.significance > 0.5) {
+          const features = {
+            pattern_type: pattern.type,
+            movement_speed: pattern.speed,
+            direction_changes: pattern.directionChanges,
+            total_distance: pattern.totalDistance,
+            significance: pattern.significance,
+            domain: window.location.hostname,
+            page_type: inferPageType(window.location.href)
+          };
+          
+          const message = {
+            type: 'user_action_mouse_pattern',
+            payload: {
+              url: window.location.href,
+              features: features,
+              trail: mouseTrail.slice(), // Copy of trail
+              timestamp: Date.now()
+            }
+          };
+          
+          chrome.runtime.sendMessage(message);
+          mouseTrail = []; // Reset trail after sending
+        }
+      }
+    }, 200); // Debounce mouse movement analysis
+  }, { passive: true });
+}
+
+/**
+ * Analyze mouse movement pattern
+ */
+function analyzeMousePattern(trail: {x: number, y: number, timestamp: number}[]): any {
+  if (trail.length < 2) {
+    return { type: 'none', significance: 0 };
+  }
+  
+  let totalDistance = 0;
+  let directionChanges = 0;
+  let lastDirection = null;
+  
+  for (let i = 1; i < trail.length; i++) {
+    const dx = trail[i].x - trail[i-1].x;
+    const dy = trail[i].y - trail[i-1].y;
+    const distance = Math.sqrt(dx * dx + dy * dy);
+    totalDistance += distance;
+    
+    // Calculate direction
+    const currentDirection = Math.atan2(dy, dx);
+    if (lastDirection !== null && Math.abs(currentDirection - lastDirection) > Math.PI / 4) {
+      directionChanges++;
+    }
+    lastDirection = currentDirection;
+  }
+  
+  const timeSpan = trail[trail.length - 1].timestamp - trail[0].timestamp;
+  const speed = totalDistance / Math.max(timeSpan, 1);
+  
+  // Determine pattern type
+  let patternType = 'linear';
+  if (directionChanges > 2) {
+    patternType = 'erratic';
+  } else if (speed < 0.1) {
+    patternType = 'slow';
+  } else if (speed > 2) {
+    patternType = 'fast';
+  }
+  
+  // Calculate significance (how noteworthy this pattern is)
+  const significance = Math.min(1, (totalDistance / 100) * (directionChanges / 3) * Math.min(speed, 1));
+  
+  return {
+    type: patternType,
+    speed,
+    directionChanges,
+    totalDistance,
+    significance
+  };
+}
+
+/**
+ * Initialize advanced event monitoring
+ */
+function initializeAdvancedEventMonitoring(): void {
+  setupScrollMonitoring();
+  setupMouseMoveMonitoring();
+  
+  // Cleanup on page unload
+  window.addEventListener('beforeunload', () => {
+    advancedThrottler.cleanup();
+  });
+  
+  console.log('[Synapse] Advanced event monitoring initialized with throttling and debouncing');
+}
+
+/**
  * Captures click events and sends them to the background script.
- * Enhanced with feature extraction for generalized event processing
+ * Enhanced with feature extraction and throttling for optimized performance
  */
 document.addEventListener('click', (event: MouseEvent) => {
   const element = event.target as HTMLElement;
-  const features = extractElementFeatures(element, window.location.href);
   
-  const clickPayload: ExtendedUserActionClickPayload = {
-    selector: getCssSelector(element),
-    x: event.clientX,
-    y: event.clientY,
-    url: window.location.href,
-    features: features
-  };
+  eventThrottler.throttleEvent(event, () => {
+    const features = extractElementFeatures(element, window.location.href);
+    
+    const clickPayload: ExtendedUserActionClickPayload = {
+      selector: getCssSelector(element),
+      x: event.clientX,
+      y: event.clientY,
+      url: window.location.href,
+      features: features
+    };
 
-  const message: RawUserAction = {
-    type: 'user_action_click',
-    payload: clickPayload,
-  };
+    const message: RawUserAction = {
+      type: 'user_action_click',
+      payload: clickPayload,
+    };
 
-  chrome.runtime.sendMessage(message);
+    chrome.runtime.sendMessage(message);
+  });
 }, true); // Use capture phase to ensure all clicks are caught
 
 /**
  * 优化的键盘事件捕捉
  * 现在只捕捉特殊键盘快捷键，而不是所有按键
- * 常规文本输入由TextInputAggregator处理
+ * 常规文本输入由TextInputAggregator处理，增加了事件节流
  */
 document.addEventListener('keydown', (event: KeyboardEvent) => {
   // 忽略修饰键本身
@@ -404,22 +748,329 @@ document.addEventListener('keydown', (event: KeyboardEvent) => {
     return; // 跳过常规字符输入，让TextInputAggregator处理
   }
 
-  const features = extractElementFeatures(target, window.location.href);
-  
-  const keydownPayload: ExtendedUserActionKeydownPayload = {
-    key: event.key,
-    code: event.code,
-    url: window.location.href,
-    features: features,
-    modifier_keys: modifierKeys
-  };
+  // Use throttler for keyboard events to prevent spam
+  eventThrottler.throttleEvent(event, () => {
+    const features = extractElementFeatures(target, window.location.href);
+    
+    const keydownPayload: ExtendedUserActionKeydownPayload = {
+      key: event.key,
+      code: event.code,
+      url: window.location.href,
+      features: features,
+      modifier_keys: modifierKeys
+    };
 
-  const message: RawUserAction = {
-    type: 'user_action_keydown',
-    payload: keydownPayload,
-  };
+    const message: RawUserAction = {
+      type: 'user_action_keydown',
+      payload: keydownPayload,
+    };
 
-  chrome.runtime.sendMessage(message);
+    chrome.runtime.sendMessage(message);
+  });
 }, true); // Use capture phase
 
-console.log('[Synapse] Content script loaded and listening for events.');
+/**
+ * Form submission monitoring
+ * 标记一个小型任务的完成
+ */
+function setupFormSubmitMonitoring(): void {
+  document.addEventListener('submit', (event) => {
+    const form = event.target as HTMLFormElement;
+    
+    eventThrottler.throttleEvent(event, () => {
+      const features = extractElementFeatures(form, window.location.href);
+      
+      // Analyze form structure
+      const inputs = form.querySelectorAll('input, textarea, select');
+      const requiredFields = form.querySelectorAll('[required]');
+      
+      const formSubmitPayload: UserActionFormSubmitPayload = {
+        form_selector: getCssSelector(form),
+        url: window.location.href,
+        features: features,
+        field_count: inputs.length,
+        has_required_fields: requiredFields.length > 0,
+        submit_method: form.method || 'GET'
+      };
+
+      const message: RawUserAction = {
+        type: 'user_action_form_submit',
+        payload: formSubmitPayload,
+      };
+
+      chrome.runtime.sendMessage(message);
+      console.log('[Synapse] Form submitted:', getCssSelector(form));
+    });
+  }, true);
+}
+
+/**
+ * Focus change tracking
+ * 追踪用户的注意力焦点
+ */
+function setupFocusChangeMonitoring(): void {
+  let lastFocusedElement: HTMLElement | null = null;
+  
+  // Focus gained
+  document.addEventListener('focusin', (event) => {
+    const target = event.target as HTMLElement;
+    
+    eventThrottler.throttleEvent(event, () => {
+      const features = extractElementFeatures(target, window.location.href);
+      
+      const focusChangePayload: UserActionFocusChangePayload = {
+        from_selector: lastFocusedElement ? getCssSelector(lastFocusedElement) : undefined,
+        to_selector: getCssSelector(target),
+        url: window.location.href,
+        features: features,
+        focus_type: lastFocusedElement ? 'switched' : 'gained'
+      };
+
+      const message: RawUserAction = {
+        type: 'user_action_focus_change',
+        payload: focusChangePayload,
+      };
+
+      chrome.runtime.sendMessage(message);
+      lastFocusedElement = target;
+    });
+  }, true);
+  
+  // Focus lost
+  document.addEventListener('focusout', (event) => {
+    const target = event.target as HTMLElement;
+    
+    eventThrottler.throttleEvent(event, () => {
+      const features = extractElementFeatures(target, window.location.href);
+      
+      const focusChangePayload: UserActionFocusChangePayload = {
+        from_selector: getCssSelector(target),
+        to_selector: undefined,
+        url: window.location.href,
+        features: features,
+        focus_type: 'lost'
+      };
+
+      const message: RawUserAction = {
+        type: 'user_action_focus_change',
+        payload: focusChangePayload,
+      };
+
+      chrome.runtime.sendMessage(message);
+      lastFocusedElement = null;
+    });
+  }, true);
+}
+
+/**
+ * Page visibility monitoring
+ * 识别工作流的中断与恢复
+ */
+function setupPageVisibilityMonitoring(): void {
+  let pageLoadTime = Date.now();
+  let lastVisibilityState = document.visibilityState;
+  
+  document.addEventListener('visibilitychange', () => {
+    const currentState = document.visibilityState;
+    const timeOnPage = Date.now() - pageLoadTime;
+    
+    const features = {
+      domain: window.location.hostname,
+      page_type: inferPageType(window.location.href),
+      time_on_page: timeOnPage
+    };
+    
+    const visibilityPayload: UserActionPageVisibilityPayload = {
+      url: window.location.href,
+      visibility_state: currentState as 'visible' | 'hidden',
+      previous_state: lastVisibilityState,
+      features: features
+    };
+
+    const message: RawUserAction = {
+      type: 'user_action_page_visibility',
+      payload: visibilityPayload,
+    };
+
+    chrome.runtime.sendMessage(message);
+    console.log('[Synapse] Page visibility changed:', currentState, 'time on page:', timeOnPage);
+    
+    lastVisibilityState = currentState;
+  });
+}
+
+/**
+ * Mouse hover prediction monitoring
+ * 预测即将发生的点击意图
+ */
+function setupMouseHoverMonitoring(): void {
+  const hoverStartTimes = new Map<HTMLElement, number>();
+  
+  document.addEventListener('mouseover', (event) => {
+    const target = event.target as HTMLElement;
+    
+    // Use throttling to prevent excessive hover events
+    advancedThrottler.throttle('mouseover', () => {
+      hoverStartTimes.set(target, Date.now());
+      
+      const features = extractElementFeatures(target, window.location.href);
+      
+      const hoverPayload: UserActionMouseHoverPayload = {
+        selector: getCssSelector(target),
+        url: window.location.href,
+        features: features,
+        x: event.clientX,
+        y: event.clientY
+      };
+
+      const message: RawUserAction = {
+        type: 'user_action_mouse_hover',
+        payload: hoverPayload,
+      };
+
+      chrome.runtime.sendMessage(message);
+    }, 100); // Throttle to once per 100ms
+  }, true);
+  
+  // Track hover duration
+  document.addEventListener('mouseout', (event) => {
+    const target = event.target as HTMLElement;
+    const hoverStartTime = hoverStartTimes.get(target);
+    
+    if (hoverStartTime) {
+      const hoverDuration = Date.now() - hoverStartTime;
+      hoverStartTimes.delete(target);
+      
+      // Only report significant hovers (>200ms)
+      if (hoverDuration > 200) {
+        const features = extractElementFeatures(target, window.location.href);
+        
+        const hoverPayload: UserActionMouseHoverPayload = {
+          selector: getCssSelector(target),
+          url: window.location.href,
+          features: features,
+          hover_duration: hoverDuration,
+          x: event.clientX,
+          y: event.clientY
+        };
+
+        const message: RawUserAction = {
+          type: 'user_action_mouse_hover',
+          payload: hoverPayload,
+        };
+
+        chrome.runtime.sendMessage(message);
+        console.log('[Synapse] Significant hover:', getCssSelector(target), 'duration:', hoverDuration);
+      }
+    }
+  }, true);
+}
+
+/**
+ * Clipboard operations monitoring
+ * 理解跨页面的信息流动
+ */
+function setupClipboardMonitoring(): void {
+  // Copy event
+  document.addEventListener('copy', (event) => {
+    const target = event.target as HTMLElement;
+    
+    eventThrottler.throttleEvent(event, () => {
+      const features = extractElementFeatures(target, window.location.href);
+      const selection = window.getSelection();
+      const hasFormatting = selection && selection.toString() !== selection.toString();
+      
+      const clipboardPayload: UserActionClipboardPayload = {
+        operation: 'copy',
+        url: window.location.href,
+        features: features,
+        text_length: selection ? selection.toString().length : 0,
+        has_formatting: hasFormatting || false
+      };
+
+      const message: RawUserAction = {
+        type: 'user_action_clipboard',
+        payload: clipboardPayload,
+      };
+
+      chrome.runtime.sendMessage(message);
+      console.log('[Synapse] Copy operation detected');
+    });
+  }, true);
+  
+  // Cut event
+  document.addEventListener('cut', (event) => {
+    const target = event.target as HTMLElement;
+    
+    eventThrottler.throttleEvent(event, () => {
+      const features = extractElementFeatures(target, window.location.href);
+      const selection = window.getSelection();
+      
+      const clipboardPayload: UserActionClipboardPayload = {
+        operation: 'cut',
+        url: window.location.href,
+        features: features,
+        text_length: selection ? selection.toString().length : 0,
+        has_formatting: false
+      };
+
+      const message: RawUserAction = {
+        type: 'user_action_clipboard',
+        payload: clipboardPayload,
+      };
+
+      chrome.runtime.sendMessage(message);
+      console.log('[Synapse] Cut operation detected');
+    });
+  }, true);
+  
+  // Paste event
+  document.addEventListener('paste', (event) => {
+    const target = event.target as HTMLElement;
+    
+    eventThrottler.throttleEvent(event, () => {
+      const features = extractElementFeatures(target, window.location.href);
+      const clipboardData = event.clipboardData;
+      const pastedText = clipboardData ? clipboardData.getData('text') : '';
+      const hasFormatting = clipboardData ? clipboardData.types.includes('text/html') : false;
+      
+      const clipboardPayload: UserActionClipboardPayload = {
+        operation: 'paste',
+        url: window.location.href,
+        features: features,
+        text_length: pastedText.length,
+        has_formatting: hasFormatting
+      };
+
+      const message: RawUserAction = {
+        type: 'user_action_clipboard',
+        payload: clipboardPayload,
+      };
+
+      chrome.runtime.sendMessage(message);
+      console.log('[Synapse] Paste operation detected');
+    });
+  }, true);
+}
+
+/**
+ * Initialize all event monitoring including new CLAUDE.md patterns
+ */
+function initializeAllEventMonitoring(): void {
+  // Initialize existing advanced monitoring
+  initializeAdvancedEventMonitoring();
+  
+  // Initialize new CLAUDE.md patterns
+  setupFormSubmitMonitoring();
+  setupFocusChangeMonitoring();
+  setupPageVisibilityMonitoring();
+  setupMouseHoverMonitoring();
+  setupClipboardMonitoring();
+  
+  console.log('[Synapse] All event monitoring initialized including CLAUDE.md patterns');
+}
+
+// Initialize all event monitoring
+initializeAllEventMonitoring();
+
+console.log('[Synapse] Content script loaded with complete event monitoring suite.');

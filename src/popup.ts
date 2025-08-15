@@ -4,14 +4,142 @@
 class PopupController {
   private sequence: GlobalActionSequence = [];
   private updateInterval: number | null = null;
+  private backgroundPort: chrome.runtime.Port | null = null;
 
   constructor() {
+    this.setupBackgroundConnection();
     this.loadSequence();
     this.loadPrediction();
     this.loadModelInfo();
     this.loadPauseState();
     this.setupEventListeners();
-    this.startPeriodicUpdates();
+    // No longer using periodic updates - using real-time connection instead
+  }
+
+  /**
+   * Setup long-lived connection with background script for real-time updates
+   */
+  private setupBackgroundConnection(): void {
+    try {
+      this.backgroundPort = chrome.runtime.connect({ name: 'popup' });
+      
+      // Listen for real-time updates from background
+      this.backgroundPort.onMessage.addListener((message) => {
+        this.handleBackgroundMessage(message);
+      });
+      
+      // Handle connection errors
+      this.backgroundPort.onDisconnect.addListener(() => {
+        console.log('[Popup] Background connection disconnected');
+        this.backgroundPort = null;
+        
+        // Attempt to reconnect after a short delay
+        setTimeout(() => {
+          this.setupBackgroundConnection();
+        }, 1000);
+      });
+      
+      // Request initial data
+      this.backgroundPort.postMessage({ type: 'requestInitialData' });
+      
+      console.log('[Popup] Long-lived connection established with background');
+    } catch (error) {
+      console.error('[Popup] Failed to establish background connection:', error);
+      // Fallback to periodic updates if connection fails
+      this.startPeriodicUpdates();
+    }
+  }
+
+  /**
+   * Handle real-time messages from background script
+   */
+  private handleBackgroundMessage(message: any): void {
+    switch (message.type) {
+      case 'sequenceUpdate':
+        this.sequence = message.data.sequence || [];
+        this.updateSequenceDisplay();
+        break;
+        
+      case 'predictionUpdate':
+        this.updatePredictionDisplay(message.data.prediction);
+        break;
+        
+      case 'modelInfoUpdate':
+        this.updateModelInfoDisplay(message.data.modelInfo, message.data.isReady);
+        break;
+        
+      case 'pauseStateUpdate':
+        this.updatePauseUI(message.data.isPaused);
+        break;
+        
+      case 'initialData':
+        // Handle initial data load
+        if (message.data.sequence) {
+          this.sequence = message.data.sequence;
+          this.updateSequenceDisplay();
+        }
+        if (message.data.prediction) {
+          this.updatePredictionDisplay(message.data.prediction);
+        }
+        if (message.data.modelInfo) {
+          this.updateModelInfoDisplay(message.data.modelInfo, message.data.isReady);
+        }
+        if (message.data.pauseState !== undefined) {
+          this.updatePauseUI(message.data.pauseState);
+        }
+        break;
+        
+      case 'error':
+        console.error('[Popup] Background error:', message.error);
+        break;
+        
+      default:
+        console.log('[Popup] Unknown message from background:', message);
+    }
+  }
+
+  /**
+   * Send message to background via long-lived connection
+   */
+  private sendToBackground(message: any): Promise<any> {
+    return new Promise((resolve, reject) => {
+      if (!this.backgroundPort) {
+        // Fallback to regular message passing
+        chrome.runtime.sendMessage(message, (response) => {
+          if (chrome.runtime.lastError) {
+            reject(chrome.runtime.lastError);
+          } else {
+            resolve(response);
+          }
+        });
+        return;
+      }
+      
+      // Use long-lived connection
+      const messageId = Date.now() + Math.random();
+      const messageWithId = { ...message, messageId };
+      
+      // Setup response listener
+      const responseListener = (response: any) => {
+        if (response.messageId === messageId) {
+          this.backgroundPort?.onMessage.removeListener(responseListener);
+          if (response.error) {
+            reject(new Error(response.error));
+          } else {
+            resolve(response.data);
+          }
+        }
+      };
+      
+      this.backgroundPort.onMessage.addListener(responseListener);
+      this.backgroundPort.postMessage(messageWithId);
+      
+      // Timeout after 5 seconds
+      setTimeout(() => {
+        this.backgroundPort?.onMessage.removeListener(responseListener);
+        reject(new Error('Message timeout'));
+      }, 5000);
+    });
   }
 
   private setupEventListeners(): void {
@@ -52,30 +180,30 @@ class PopupController {
   }
 
   private clearSequence(): void {
-    chrome.runtime.sendMessage({ type: 'clearSequence' }, (response) => {
-      if (chrome.runtime.lastError) {
-        console.error('Failed to clear sequence:', chrome.runtime.lastError.message);
-        return;
-      }
-      if (response && response.success) {
-        this.sequence = [];
-        this.updateSequenceDisplay();
-        console.log('Sequence cleared and UI updated.');
-      }
-    });
+    this.sendToBackground({ type: 'clearSequence' })
+      .then((response) => {
+        if (response && response.success) {
+          this.sequence = [];
+          this.updateSequenceDisplay();
+          console.log('Sequence cleared and UI updated.');
+        }
+      })
+      .catch((error) => {
+        console.error('Failed to clear sequence:', error);
+      });
   }
 
   private loadSequence(): void {
-    chrome.runtime.sendMessage({ type: 'getSequence' }, (response) => {
-      if (chrome.runtime.lastError) {
-        console.error('Failed to load sequence:', chrome.runtime.lastError.message);
-        return;
-      }
-      if (response && response.sequence) {
-        this.sequence = response.sequence;
-        this.updateSequenceDisplay();
-      }
-    });
+    this.sendToBackground({ type: 'getSequence' })
+      .then((response) => {
+        if (response && response.sequence) {
+          this.sequence = response.sequence;
+          this.updateSequenceDisplay();
+        }
+      })
+      .catch((error) => {
+        console.error('Failed to load sequence:', error);
+      });
   }
 
   private loadPrediction(): void {
@@ -109,16 +237,16 @@ class PopupController {
   }
 
   private togglePause(): void {
-    chrome.runtime.sendMessage({ type: 'togglePause' }, (response) => {
-      if (chrome.runtime.lastError) {
-        console.error('Failed to toggle pause:', chrome.runtime.lastError.message);
-        return;
-      }
-      if (response) {
-        this.updatePauseUI(response.isPaused);
-        console.log(`Extension ${response.isPaused ? 'paused' : 'resumed'}`);
-      }
-    });
+    this.sendToBackground({ type: 'togglePause' })
+      .then((response) => {
+        if (response) {
+          this.updatePauseUI(response.isPaused);
+          console.log(`Extension ${response.isPaused ? 'paused' : 'resumed'}`);
+        }
+      })
+      .catch((error) => {
+        console.error('Failed to toggle pause:', error);
+      });
   }
 
   private updatePauseUI(isPaused: boolean): void {
@@ -146,11 +274,12 @@ class PopupController {
   }
 
   private startPeriodicUpdates(): void {
-    // Update prediction and model info every 5 seconds
+    // Fallback periodic updates when long-lived connection is not available
+    console.log('[Popup] Using fallback periodic updates');
     this.updateInterval = window.setInterval(() => {
       this.loadPrediction();
       this.loadModelInfo();
-      this.loadPauseState(); // Also update pause state
+      this.loadPauseState();
     }, 5000);
   }
 
@@ -277,7 +406,8 @@ class PopupController {
       this.loadDevModeData();
     } else {
       devPanel.style.display = 'none';
-      if (this.updateInterval) {
+      // Don't clear the connection-based updates, only the periodic fallback
+      if (this.updateInterval && !this.backgroundPort) {
         clearInterval(this.updateInterval);
         this.updateInterval = null;
       }

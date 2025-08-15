@@ -44,6 +44,11 @@ const PAUSE_STATE_KEY = 'extensionPaused';
 const TRAINING_INTERVAL = 50; // Train every 50 events
 const MIN_TRAINING_EVENTS = 20; // Minimum events needed for training
 
+// Batch storage configuration
+const BATCH_WRITE_DELAY = 2000; // 2 seconds delay for batch writes
+const BATCH_WRITE_MAX_SIZE = 10; // Maximum events in batch before forced write
+const MAX_SEQUENCE_SIZE = 5000; // Maximum sequence size to prevent memory issues
+
 // ML Engine Constants
 const MODEL_STORAGE_URL = 'indexeddb://synapse-model';
 const SKILLS_STORAGE_KEY = 'action_skills';
@@ -368,6 +373,18 @@ class SkillDetector {
 
 // Extension pause state
 let isPaused = false;
+
+// Batch storage management
+let eventBatch: EnrichedEvent[] = [];
+let batchWriteTimer: number | null = null;
+let sequenceSize = 0;
+
+// Dynamic training frequency management
+let lastTrainingTime = 0;
+let userActivityWindow: number[] = []; // Rolling window of event timestamps
+const ACTIVITY_WINDOW_SIZE = 100; // Track last 100 events
+const IDLE_TRAINING_DELAY = 5000; // 5 seconds of inactivity before training
+let idleTrainingTimer: number | null = null;
 
 // Simplified tokenizer without external dependencies
 class SimpleEventTokenizer {
@@ -699,7 +716,7 @@ mlWorker.onerror = (error) => {
 };
 
 /**
- * Adds a new event to the global sequence in session storage.
+ * Adds a new event to the batch for optimized batch writing.
  * @param event The enriched event to add.
  */
 async function addEventToSequence(event: EnrichedEvent): Promise<void> {
@@ -710,38 +727,126 @@ async function addEventToSequence(event: EnrichedEvent): Promise<void> {
   }
 
   try {
+    // Add to batch
+    eventBatch.push(event);
+    sequenceSize++;
+    
+    // Check if we need to force write due to batch size
+    if (eventBatch.length >= BATCH_WRITE_MAX_SIZE) {
+      await flushEventBatch();
+    } else {
+      // Schedule batch write if not already scheduled
+      scheduleBatchWrite();
+    }
+    
+    // Trigger ML operations with current batch (non-blocking)
+    if (eventBatch.length >= 5) {
+      handleMLOperationsAsync();
+    }
+  } catch (error) {
+    console.error('[Synapse] Error adding event to batch:', error);
+  }
+}
+
+/**
+ * Schedules a batch write operation.
+ */
+function scheduleBatchWrite(): void {
+  if (batchWriteTimer !== null) {
+    return; // Already scheduled
+  }
+  
+  batchWriteTimer = window.setTimeout(async () => {
+    await flushEventBatch();
+  }, BATCH_WRITE_DELAY);
+}
+
+/**
+ * Flushes the current event batch to storage.
+ */
+async function flushEventBatch(): Promise<void> {
+  if (eventBatch.length === 0) {
+    return;
+  }
+  
+  try {
+    // Clear the timer
+    if (batchWriteTimer !== null) {
+      clearTimeout(batchWriteTimer);
+      batchWriteTimer = null;
+    }
+    
+    // Get current sequence
     const result = await new Promise<{ [key: string]: any }>(resolve => {
       chrome.storage.session.get([SEQUENCE_STORAGE_KEY], resolve);
     });
-
+    
     const currentSequence = (result[SEQUENCE_STORAGE_KEY] || []) as GlobalActionSequence;
-    currentSequence.push(event);
-
+    
+    // Add batched events
+    currentSequence.push(...eventBatch);
+    
+    // Implement sequence size management
+    if (currentSequence.length > MAX_SEQUENCE_SIZE) {
+      const removeCount = currentSequence.length - MAX_SEQUENCE_SIZE;
+      currentSequence.splice(0, removeCount);
+      console.log(`[Synapse] Trimmed ${removeCount} old events to maintain sequence size limit`);
+    }
+    
+    // Write to storage
     await new Promise<void>(resolve => {
       chrome.storage.session.set({ [SEQUENCE_STORAGE_KEY]: currentSequence }, resolve);
     });
     
-    // Log for debugging
-    console.log(`[Synapse] Event added. Total sequence length: ${currentSequence.length}`);
-    console.table(currentSequence.slice(-5)); // Log last 5 events
-
-    // Train model periodically and make predictions
-    await handleMLOperations(currentSequence);
+    console.log(`[Synapse] Batch written: ${eventBatch.length} events. Total sequence length: ${currentSequence.length}`);
+    
+    // Clear the batch
+    eventBatch = [];
+    
+    // Update sequence size
+    sequenceSize = currentSequence.length;
   } catch (error) {
-    console.error('[Synapse] Error adding event to sequence:', error);
+    console.error('[Synapse] Error flushing event batch:', error);
+    // Don't clear batch on error to prevent data loss
+  }
+}
+
+/**
+ * Handles ML operations asynchronously without blocking event processing.
+ */
+async function handleMLOperationsAsync(): Promise<void> {
+  try {
+    // Get current sequence for ML operations
+    const result = await new Promise<{ [key: string]: any }>(resolve => {
+      chrome.storage.session.get([SEQUENCE_STORAGE_KEY], resolve);
+    });
+    
+    const currentSequence = (result[SEQUENCE_STORAGE_KEY] || []) as GlobalActionSequence;
+    
+    // Combine with current batch for real-time analysis
+    const fullSequence = [...currentSequence, ...eventBatch];
+    
+    await handleMLOperations(fullSequence);
+  } catch (error) {
+    console.error('[Synapse] Error in async ML operations:', error);
   }
 }
 
 /**
  * Handle ML operations: training and prediction
- * Enhanced with advanced ML engine capabilities
+ * Enhanced with advanced ML engine capabilities and dynamic training
  */
 async function handleMLOperations(currentSequence: GlobalActionSequence): Promise<void> {
   try {
-    // Train both the simple predictor and the advanced ML engine
-    if (currentSequence.length >= MIN_TRAINING_EVENTS && 
-        currentSequence.length % TRAINING_INTERVAL === 0) {
-      console.log('[Synapse] Starting periodic model training...');
+    // Update activity tracking
+    updateActivityWindow();
+    
+    // Check if we should train based on dynamic conditions
+    const shouldTrain = shouldPerformTraining(currentSequence);
+    
+    if (shouldTrain) {
+      console.log('[Synapse] Starting dynamic model training...');
+      lastTrainingTime = Date.now();
       
       // Train simple predictor (backward compatibility)
       await predictor.trainOnSequence(currentSequence);
@@ -772,6 +877,9 @@ async function handleMLOperations(currentSequence: GlobalActionSequence): Promis
           console.warn('[Synapse] Local ML engine training failed, falling back to simple predictor:', error);
         }
       }
+    } else {
+      // Schedule training during user idle time
+      scheduleIdleTraining(currentSequence);
     }
 
     // Make predictions using both systems
@@ -850,6 +958,145 @@ async function handleMLOperations(currentSequence: GlobalActionSequence): Promis
     }
   } catch (error) {
     console.error('[Synapse] Error in ML operations:', error);
+  }
+}
+
+/**
+ * Updates the user activity window with current timestamp.
+ */
+function updateActivityWindow(): void {
+  const now = Date.now();
+  userActivityWindow.push(now);
+  
+  // Keep only recent events in the window
+  if (userActivityWindow.length > ACTIVITY_WINDOW_SIZE) {
+    userActivityWindow.shift();
+  }
+}
+
+/**
+ * Determines if training should be performed based on dynamic conditions.
+ */
+function shouldPerformTraining(sequence: GlobalActionSequence): boolean {
+  if (sequence.length < MIN_TRAINING_EVENTS) {
+    return false;
+  }
+  
+  const now = Date.now();
+  const timeSinceLastTraining = now - lastTrainingTime;
+  
+  // Calculate user activity rate (events per minute)
+  const recentEvents = userActivityWindow.filter(timestamp => 
+    now - timestamp < 60000 // Last minute
+  );
+  const activityRate = recentEvents.length;
+  
+  // Dynamic training conditions:
+  // 1. Standard interval for normal activity (1-10 events/min)
+  // 2. Longer interval for high activity (>10 events/min)
+  // 3. Shorter interval for low activity (<1 event/min)
+  
+  let dynamicInterval = TRAINING_INTERVAL;
+  
+  if (activityRate > 10) {
+    // High activity: train less frequently to avoid performance impact
+    dynamicInterval = TRAINING_INTERVAL * 2;
+  } else if (activityRate < 1) {
+    // Low activity: train more frequently for better responsiveness
+    dynamicInterval = Math.max(TRAINING_INTERVAL / 2, MIN_TRAINING_EVENTS);
+  }
+  
+  // Check if enough events have accumulated since last training
+  const eventsSinceTraining = sequence.length % dynamicInterval === 0;
+  
+  // Also check minimum time between trainings (prevent too frequent training)
+  const minTimeBetweenTraining = 30000; // 30 seconds
+  const timeCondition = timeSinceLastTraining > minTimeBetweenTraining;
+  
+  return eventsSinceTraining && timeCondition;
+}
+
+/**
+ * Schedules training during user idle time using chrome.idle API.
+ */
+function scheduleIdleTraining(sequence: GlobalActionSequence): void {
+  // Clear existing idle timer
+  if (idleTrainingTimer !== null) {
+    clearTimeout(idleTrainingTimer);
+  }
+  
+  // Check if training is needed
+  if (sequence.length < MIN_TRAINING_EVENTS) {
+    return;
+  }
+  
+  const now = Date.now();
+  const timeSinceLastTraining = now - lastTrainingTime;
+  
+  // Only schedule if it's been a while since last training
+  if (timeSinceLastTraining < 60000) { // Less than 1 minute
+    return;
+  }
+  
+  idleTrainingTimer = window.setTimeout(async () => {
+    try {
+      // Check if user is still idle by looking at recent activity
+      const recentActivity = userActivityWindow.filter(timestamp => 
+        Date.now() - timestamp < IDLE_TRAINING_DELAY
+      );
+      
+      if (recentActivity.length === 0) {
+        // User is idle, safe to train
+        console.log('[Synapse] Starting idle-time training...');
+        lastTrainingTime = Date.now();
+        
+        // Perform training (similar to handleMLOperations but focused on training)
+        await performIdleTraining(sequence);
+      }
+    } catch (error) {
+      console.error('[Synapse] Error in idle training:', error);
+    }
+    
+    idleTrainingTimer = null;
+  }, IDLE_TRAINING_DELAY);
+}
+
+/**
+ * Performs training during idle time.
+ */
+async function performIdleTraining(sequence: GlobalActionSequence): Promise<void> {
+  try {
+    // Train simple predictor
+    await predictor.trainOnSequence(sequence);
+    
+    // Train ML Worker if available
+    if (mlWorkerReady) {
+      console.log('[Synapse] Sending sequence to ML Worker for idle training...');
+      mlWorker.postMessage({ 
+        type: 'train', 
+        payload: { sequence } 
+      });
+    } else {
+      // Fallback to local ML engine
+      try {
+        await mlEngine.train(sequence);
+        console.log('[Synapse] Local ML engine idle training completed');
+        
+        // Detect and analyze skills
+        const detectedSkills = skillDetector.detectSkills(sequence, mlEngine);
+        console.log(`[Synapse] Detected ${detectedSkills.length} behavioral skills during idle training`);
+        
+        // Store skills for popup display
+        chrome.storage.session.set({
+          detectedSkills: detectedSkills.slice(0, 10),
+          skillStats: skillDetector.getSkillStats()
+        });
+      } catch (error) {
+        console.warn('[Synapse] Local ML engine idle training failed:', error);
+      }
+    }
+  } catch (error) {
+    console.error('[Synapse] Error in idle training:', error);
   }
 }
 
@@ -1082,6 +1329,128 @@ console.log('[Synapse] Background script loaded and ready.');
 
 // Initialize pause state
 initializePauseState();
+
+// Long-lived connections for real-time popup updates
+const popupConnections = new Set<chrome.runtime.Port>();
+
+// Handle long-lived connections from popup
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name === 'popup') {
+    console.log('[Synapse] Popup connected via long-lived connection');
+    popupConnections.add(port);
+    
+    // Handle messages from popup
+    port.onMessage.addListener(async (message) => {
+      await handlePopupMessage(port, message);
+    });
+    
+    // Clean up when popup disconnects
+    port.onDisconnect.addListener(() => {
+      console.log('[Synapse] Popup disconnected');
+      popupConnections.delete(port);
+    });
+  }
+});
+
+/**
+ * Handle messages from popup via long-lived connection
+ */
+async function handlePopupMessage(port: chrome.runtime.Port, message: any): Promise<void> {
+  const { type, messageId } = message;
+  
+  try {
+    let response: any = {};
+    
+    switch (type) {
+      case 'requestInitialData':
+        // Send all initial data to popup
+        const sequenceResult = await new Promise<{ [key: string]: any }>(resolve => {
+          chrome.storage.session.get([SEQUENCE_STORAGE_KEY], resolve);
+        });
+        const predictionResult = await new Promise<{ [key: string]: any }>(resolve => {
+          chrome.storage.session.get(['lastPrediction'], resolve);
+        });
+        
+        response = {
+          sequence: sequenceResult[SEQUENCE_STORAGE_KEY] || [],
+          prediction: predictionResult.lastPrediction,
+          pauseState: isPaused,
+          modelInfo: predictor.getModelInfo(),
+          isReady: predictor.isReady()
+        };
+        
+        port.postMessage({
+          type: 'initialData',
+          data: response,
+          messageId
+        });
+        break;
+        
+      case 'clearSequence':
+        await new Promise<void>(resolve => {
+          chrome.storage.session.set({ [SEQUENCE_STORAGE_KEY]: [] }, resolve);
+        });
+        response = { success: true };
+        
+        // Notify all connected popups
+        notifyPopups('sequenceUpdate', { sequence: [] });
+        
+        if (messageId) {
+          port.postMessage({ messageId, data: response });
+        }
+        break;
+        
+      case 'togglePause':
+        isPaused = !isPaused;
+        await new Promise<void>(resolve => {
+          chrome.storage.session.set({ [PAUSE_STATE_KEY]: isPaused }, resolve);
+        });
+        response = { isPaused };
+        
+        // Notify all connected popups
+        notifyPopups('pauseStateUpdate', { isPaused });
+        
+        if (messageId) {
+          port.postMessage({ messageId, data: response });
+        }
+        break;
+        
+      default:
+        // Handle other message types with existing logic
+        // This maintains backward compatibility
+        break;
+    }
+  } catch (error) {
+    console.error('[Synapse] Error handling popup message:', error);
+    if (messageId) {
+      port.postMessage({ 
+        messageId, 
+        error: error instanceof Error ? error.message : 'Unknown error' 
+      });
+    }
+  }
+}
+
+/**
+ * Notify all connected popups of updates
+ */
+function notifyPopups(type: string, data: any): void {
+  const message = { type, data };
+  popupConnections.forEach(port => {
+    try {
+      port.postMessage(message);
+    } catch (error) {
+      console.warn('[Synapse] Failed to send message to popup:', error);
+      popupConnections.delete(port);
+    }
+  });
+}
+
+// Ensure batch is flushed on extension shutdown
+chrome.runtime.onSuspend.addListener(async () => {
+  console.log('[Synapse] Extension suspending, flushing event batch...');
+  await flushEventBatch();
+});
 
 // Initialize storage on startup
 chrome.runtime.onStartup.addListener(() => {
