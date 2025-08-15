@@ -82,12 +82,24 @@ class IndexedDBManager {
     const transaction = this.db!.transaction([this.storeName], 'readwrite');
     const store = transaction.objectStore(this.storeName);
     
+    let url = '';
+    let domain = '';
+    
+    // Extract URL based on event type
+    if (event.type === 'user_action_click' || event.type === 'user_action_keydown' || event.type === 'user_action_text_input') {
+      url = (event.payload as any)?.url || '';
+    } else if (event.type === 'browser_action_tab_created' || event.type === 'browser_action_tab_updated') {
+      url = (event.payload as any)?.url || '';
+    }
+    
+    domain = this.extractDomain(url);
+    
     const eventRecord: EventRecord = {
       timestamp: event.timestamp,
       event: event,
       type: event.type,
-      url: event.payload?.url || '',
-      domain: this.extractDomain(event.payload?.url || '')
+      url: url,
+      domain: domain
     };
 
     return new Promise((resolve, reject) => {
@@ -120,12 +132,24 @@ class IndexedDBManager {
       let hasError = false;
 
       events.forEach(event => {
+        let url = '';
+        let domain = '';
+        
+        // Extract URL based on event type
+        if (event.type === 'user_action_click' || event.type === 'user_action_keydown' || event.type === 'user_action_text_input') {
+          url = (event.payload as any)?.url || '';
+        } else if (event.type === 'browser_action_tab_created' || event.type === 'browser_action_tab_updated') {
+          url = (event.payload as any)?.url || '';
+        }
+        
+        domain = this.extractDomain(url);
+        
         const eventRecord: EventRecord = {
           timestamp: event.timestamp,
           event: event,
           type: event.type,
-          url: event.payload?.url || '',
-          domain: this.extractDomain(event.payload?.url || '')
+          url: url,
+          domain: domain
         };
 
         const request = store.add(eventRecord);
