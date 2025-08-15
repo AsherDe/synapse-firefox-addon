@@ -74,6 +74,202 @@ const MAX_PATTERN_LENGTH = 10;
 const MIN_PATTERN_FREQUENCY = 2;
 const PRUNING_THRESHOLD = 0.01;
 
+// Phase 2.2: K-Means constants for codebook generation
+const CODEBOOK_SIZE = 128;
+const KMEANS_MAX_ITERATIONS = 10;
+
+/**
+ * Phase 2.2: Mathematical utilities for heavy computations in worker
+ */
+
+// Euclidean distance calculation
+function euclideanDistance(a: number[], b: number[]): number {
+  if (a.length !== b.length) return Infinity;
+  return Math.sqrt(a.reduce((sum, val, i) => sum + Math.pow(val - b[i], 2), 0));
+}
+
+// Simple DCT implementation for feature extraction
+function simpleDCT(input: number[]): number[] {
+  const N = input.length;
+  const output: number[] = [];
+  
+  for (let k = 0; k < N; k++) {
+    let sum = 0;
+    for (let n = 0; n < N; n++) {
+      sum += input[n] * Math.cos(Math.PI * k * (2 * n + 1) / (2 * N));
+    }
+    output[k] = sum;
+  }
+  
+  return output;
+}
+
+// K-means clustering implementation (moved from tokenizer.ts)
+function simpleKMeans(data: number[][], k: number): number[][] {
+  if (data.length === 0 || k === 0) return [];
+  
+  // Initialize centroids randomly
+  const centroids: number[][] = [];
+  const dims = data[0].length;
+  
+  for (let i = 0; i < k; i++) {
+    const centroid: number[] = [];
+    for (let j = 0; j < dims; j++) {
+      centroid.push(Math.random() * 2 - 1);
+    }
+    centroids.push(centroid);
+  }
+  
+  // Iterative clustering
+  for (let iter = 0; iter < KMEANS_MAX_ITERATIONS; iter++) {
+    const clusters: number[][][] = Array(k).fill(null).map(() => []);
+    
+    // Assign points to clusters
+    for (const point of data) {
+      let minDist = Infinity;
+      let bestCluster = 0;
+      
+      for (let i = 0; i < k; i++) {
+        const dist = euclideanDistance(point, centroids[i]);
+        if (dist < minDist) {
+          minDist = dist;
+          bestCluster = i;
+        }
+      }
+      
+      clusters[bestCluster].push(point);
+    }
+    
+    // Update centroids
+    for (let i = 0; i < k; i++) {
+      if (clusters[i].length > 0) {
+        for (let j = 0; j < dims; j++) {
+          centroids[i][j] = clusters[i].reduce((sum, point) => sum + point[j], 0) / clusters[i].length;
+        }
+      }
+    }
+  }
+  
+  return centroids;
+}
+
+/**
+ * Phase 2.2: Advanced tokenizer with heavy computation isolation
+ */
+class WorkerTokenizer {
+  private codebook: number[][] = [];
+  
+  /**
+   * Update codebook using K-means clustering (heavy computation)
+   */
+  public async updateCodebook(events: EnrichedEvent[]): Promise<number[][]> {
+    if (events.length < CODEBOOK_SIZE) {
+      console.log('[Worker] Not enough events to update codebook');
+      return this.codebook;
+    }
+
+    try {
+      console.log(`[Worker] Starting K-means clustering with ${events.length} events`);
+      
+      // Convert events to feature vectors
+      const featureVectors = events.map(event => this.eventToFeatureVector(event));
+      
+      // Apply K-means clustering (computationally intensive)
+      const centroids = simpleKMeans(featureVectors, CODEBOOK_SIZE);
+      
+      // Update codebook with cluster centers
+      this.codebook = centroids;
+      
+      console.log('[Worker] Codebook updated with K-means clustering');
+      return this.codebook;
+    } catch (error) {
+      console.error('[Worker] Error updating codebook:', error);
+      return this.codebook;
+    }
+  }
+  
+  /**
+   * Convert event to feature vector for clustering
+   */
+  private eventToFeatureVector(event: EnrichedEvent): number[] {
+    const vector: number[] = [];
+    
+    // Event type encoding
+    const eventTypeMap: Record<string, number> = {
+      'user_action_click': 1.0,
+      'user_action_keydown': 2.0,
+      'user_action_text_input': 3.0,
+      'browser_action_tab_activated': 4.0,
+      'browser_action_tab_created': 5.0,
+      'browser_action_tab_removed': 6.0,
+      'browser_action_tab_updated': 7.0
+    };
+    
+    vector.push(eventTypeMap[event.type] || 0.0);
+    
+    // Extract payload features based on event type
+    if (event.type === 'user_action_click') {
+      const payload = event.payload as any;
+      vector.push(payload.x || 0);
+      vector.push(payload.y || 0);
+      
+      // Features extraction
+      if (payload.features) {
+        vector.push(payload.features.is_nav_link ? 1.0 : 0.0);
+        vector.push(payload.features.is_input_field ? 1.0 : 0.0);
+        vector.push(payload.features.path_depth || 0);
+      } else {
+        vector.push(0, 0, 0);
+      }
+    } else if (event.type === 'user_action_keydown') {
+      const payload = event.payload as any;
+      vector.push(payload.key ? payload.key.charCodeAt(0) : 0);
+      vector.push(payload.ctrlKey ? 1.0 : 0.0);
+      vector.push(payload.shiftKey ? 1.0 : 0.0);
+      vector.push(payload.altKey ? 1.0 : 0.0);
+    } else {
+      // Pad with zeros for other event types
+      vector.push(0, 0, 0, 0);
+    }
+    
+    // Time features
+    const hour = new Date(event.timestamp).getHours();
+    vector.push(Math.sin(2 * Math.PI * hour / 24)); // Cyclic hour encoding
+    vector.push(Math.cos(2 * Math.PI * hour / 24));
+    
+    // Domain features (hash-based encoding)
+    const url = (event.payload as any)?.url || '';
+    try {
+      const domain = new URL(url).hostname;
+      vector.push(this.simpleStringHash(domain) % 100 / 100); // Normalized hash
+    } catch {
+      vector.push(0);
+    }
+    
+    return vector;
+  }
+  
+  /**
+   * Simple string hash function
+   */
+  private simpleStringHash(str: string): number {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+      const char = str.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash; // Convert to 32-bit integer
+    }
+    return Math.abs(hash);
+  }
+  
+  /**
+   * Get current codebook
+   */
+  public getCodebook(): number[][] {
+    return this.codebook;
+  }
+}
+
 /**
  * Rich context feature extractor for enhanced ML predictions
  */
@@ -743,6 +939,10 @@ class EnhancedMLEngine {
 // Initialize enhanced ML engine
 const enhancedMLEngine = new EnhancedMLEngine();
 
+// Phase 2.2: Initialize worker-specific components for heavy computation
+const workerTokenizer = new WorkerTokenizer();
+const contextExtractor = new ContextExtractor();
+
 // Performance monitoring
 const performanceMonitor = {
   trainingTimes: [] as number[],
@@ -776,8 +976,37 @@ const performanceMonitor = {
 };
 
 // Worker message handler
-self.onmessage = (event) => {
+self.onmessage = async (event) => {
   const { type, payload } = event.data;
+
+  // Phase 2.2: Handle codebook update requests (heavy K-means computation)
+  if (type === 'update_codebook') {
+    const startTime = performance.now();
+    console.log('[Enhanced ML Worker] Starting codebook update with K-means clustering...');
+    
+    try {
+      const newCodebook = await workerTokenizer.updateCodebook(payload.events);
+      const updateDuration = performance.now() - startTime;
+      
+      console.log(`[Enhanced ML Worker] Codebook update complete in ${updateDuration.toFixed(2)}ms`);
+      
+      self.postMessage({
+        type: 'codebook_updated',
+        success: true,
+        codebook: newCodebook,
+        updateDuration,
+        eventsProcessed: payload.events.length
+      });
+    } catch (error) {
+      console.error('[Enhanced ML Worker] Codebook update failed:', error);
+      self.postMessage({
+        type: 'codebook_updated',
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+    return;
+  }
 
   if (type === 'train') {
     const startTime = performance.now();

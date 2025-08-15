@@ -15,6 +15,7 @@
  */
 
 /// <reference path="./types.ts" />
+/// <reference path="./indexeddb-manager.ts" />
 
 // Since browser extensions with manifest v2 don't support ES modules in background scripts,
 // we'll inline all the necessary code here to avoid import statements
@@ -37,7 +38,7 @@ interface TensorFlowTensor {
   dispose(): void;
 }
 
-const SEQUENCE_STORAGE_KEY = 'globalActionSequence';
+const SEQUENCE_STORAGE_KEY = 'globalActionSequence'; // Legacy key for migration
 const PAUSE_STATE_KEY = 'extensionPaused';
 
 // Training and prediction configuration
@@ -374,6 +375,51 @@ class SkillDetector {
 // Extension pause state
 let isPaused = false;
 
+// IndexedDB Manager initialization
+let dbManager: any = null;
+
+// Initialize IndexedDB Manager
+async function initializeDatabase(): Promise<void> {
+  try {
+    // Import IndexedDB manager (inline to avoid module issues)
+    const { indexedDBManager } = await import('./indexeddb-manager.js');
+    dbManager = indexedDBManager;
+    await dbManager.init();
+    console.log('[Synapse] IndexedDB initialized successfully');
+    
+    // Migrate existing data from chrome.storage.session if any
+    await migrateLegacyData();
+  } catch (error) {
+    console.error('[Synapse] Failed to initialize IndexedDB:', error);
+    // Fallback to chrome.storage.session if IndexedDB fails
+    console.log('[Synapse] Falling back to chrome.storage.session');
+  }
+}
+
+// Migrate legacy data from chrome.storage.session to IndexedDB
+async function migrateLegacyData(): Promise<void> {
+  try {
+    const result = await new Promise<{ [key: string]: any }>(resolve => {
+      chrome.storage.session.get([SEQUENCE_STORAGE_KEY], resolve);
+    });
+    
+    const legacySequence = result[SEQUENCE_STORAGE_KEY] as GlobalActionSequence;
+    if (legacySequence && legacySequence.length > 0) {
+      console.log(`[Synapse] Migrating ${legacySequence.length} events from legacy storage`);
+      await dbManager.addEvents(legacySequence);
+      
+      // Clear legacy storage after successful migration
+      await new Promise<void>(resolve => {
+        chrome.storage.session.set({ [SEQUENCE_STORAGE_KEY]: [] }, resolve);
+      });
+      
+      console.log('[Synapse] Legacy data migration completed');
+    }
+  } catch (error) {
+    console.error('[Synapse] Error migrating legacy data:', error);
+  }
+}
+
 // Batch storage management
 let eventBatch: EnrichedEvent[] = [];
 let batchWriteTimer: number | null = null;
@@ -385,6 +431,11 @@ let userActivityWindow: number[] = []; // Rolling window of event timestamps
 const ACTIVITY_WINDOW_SIZE = 100; // Track last 100 events
 const IDLE_TRAINING_DELAY = 5000; // 5 seconds of inactivity before training
 let idleTrainingTimer: number | null = null;
+
+// Phase 2.1: Chrome Idle API integration
+let currentIdleState: 'active' | 'idle' | 'locked' = 'active';
+let pendingTrainingData: GlobalActionSequence | null = null;
+const IDLE_DETECTION_INTERVAL = 15; // seconds
 
 // Simplified tokenizer without external dependencies
 class SimpleEventTokenizer {
@@ -707,6 +758,30 @@ mlWorker.onmessage = (event) => {
       workerSkills: event.data.skills.slice(0, 10)
     });
   }
+  
+  // Phase 2.2: Handle codebook update completion from Worker
+  if (type === 'codebook_updated') {
+    if (event.data.success) {
+      console.log(`[Background] Codebook updated in Worker: ${event.data.eventsProcessed} events processed in ${event.data.updateDuration.toFixed(2)}ms`);
+      // Store the codebook for potential use in background script
+      chrome.storage.local.set({ 
+        worker_codebook: event.data.codebook,
+        codebook_updated: Date.now()
+      });
+    } else {
+      console.error('[Background] Worker codebook update failed:', event.data.error);
+    }
+  }
+  
+  // Phase 2.2: Handle pattern analysis results from Worker
+  if (type === 'analyze_patterns') {
+    console.log('[Background] Pattern analysis completed in Worker');
+  }
+  
+  // Phase 2.2: Handle model optimization results from Worker
+  if (type === 'optimize_model') {
+    console.log('[Background] Model optimization completed in Worker');
+  }
 };
 
 // Worker error handling
@@ -762,7 +837,8 @@ function scheduleBatchWrite(): void {
 }
 
 /**
- * Flushes the current event batch to storage.
+ * Flushes the current event batch to IndexedDB storage.
+ * Phase 1.1: High-performance O(1) write operations
  */
 async function flushEventBatch(): Promise<void> {
   if (eventBatch.length === 0) {
@@ -776,35 +852,40 @@ async function flushEventBatch(): Promise<void> {
       batchWriteTimer = null;
     }
     
-    // Get current sequence
-    const result = await new Promise<{ [key: string]: any }>(resolve => {
-      chrome.storage.session.get([SEQUENCE_STORAGE_KEY], resolve);
-    });
-    
-    const currentSequence = (result[SEQUENCE_STORAGE_KEY] || []) as GlobalActionSequence;
-    
-    // Add batched events
-    currentSequence.push(...eventBatch);
-    
-    // Implement sequence size management
-    if (currentSequence.length > MAX_SEQUENCE_SIZE) {
-      const removeCount = currentSequence.length - MAX_SEQUENCE_SIZE;
-      currentSequence.splice(0, removeCount);
-      console.log(`[Synapse] Trimmed ${removeCount} old events to maintain sequence size limit`);
+    if (dbManager) {
+      // Use IndexedDB for high-performance storage
+      await dbManager.addEvents(eventBatch);
+      console.log(`[Synapse] IndexedDB batch written: ${eventBatch.length} events`);
+    } else {
+      // Fallback to chrome.storage.session if IndexedDB not available
+      const result = await new Promise<{ [key: string]: any }>(resolve => {
+        chrome.storage.session.get([SEQUENCE_STORAGE_KEY], resolve);
+      });
+      
+      const currentSequence = (result[SEQUENCE_STORAGE_KEY] || []) as GlobalActionSequence;
+      currentSequence.push(...eventBatch);
+      
+      // Implement sequence size management for fallback
+      if (currentSequence.length > MAX_SEQUENCE_SIZE) {
+        const removeCount = currentSequence.length - MAX_SEQUENCE_SIZE;
+        currentSequence.splice(0, removeCount);
+        console.log(`[Synapse] Trimmed ${removeCount} old events to maintain sequence size limit`);
+      }
+      
+      await new Promise<void>(resolve => {
+        chrome.storage.session.set({ [SEQUENCE_STORAGE_KEY]: currentSequence }, resolve);
+      });
+      
+      console.log(`[Synapse] Fallback batch written: ${eventBatch.length} events. Total: ${currentSequence.length}`);
     }
-    
-    // Write to storage
-    await new Promise<void>(resolve => {
-      chrome.storage.session.set({ [SEQUENCE_STORAGE_KEY]: currentSequence }, resolve);
-    });
-    
-    console.log(`[Synapse] Batch written: ${eventBatch.length} events. Total sequence length: ${currentSequence.length}`);
     
     // Clear the batch
     eventBatch = [];
     
-    // Update sequence size
-    sequenceSize = currentSequence.length;
+    // Update sequence size (get actual count from IndexedDB)
+    if (dbManager) {
+      sequenceSize = await dbManager.getTotalEventCount();
+    }
   } catch (error) {
     console.error('[Synapse] Error flushing event batch:', error);
     // Don't clear batch on error to prevent data loss
@@ -813,15 +894,24 @@ async function flushEventBatch(): Promise<void> {
 
 /**
  * Handles ML operations asynchronously without blocking event processing.
+ * Phase 1.1: Uses IndexedDB for efficient event retrieval
  */
 async function handleMLOperationsAsync(): Promise<void> {
   try {
-    // Get current sequence for ML operations
-    const result = await new Promise<{ [key: string]: any }>(resolve => {
-      chrome.storage.session.get([SEQUENCE_STORAGE_KEY], resolve);
-    });
+    let currentSequence: GlobalActionSequence = [];
     
-    const currentSequence = (result[SEQUENCE_STORAGE_KEY] || []) as GlobalActionSequence;
+    if (dbManager) {
+      // Get recent events from IndexedDB for ML operations
+      // Only get what we need for training/prediction (performance optimization)
+      const recentEvents = await dbManager.getRecentEvents(1000);
+      currentSequence = recentEvents;
+    } else {
+      // Fallback to chrome.storage.session
+      const result = await new Promise<{ [key: string]: any }>(resolve => {
+        chrome.storage.session.get([SEQUENCE_STORAGE_KEY], resolve);
+      });
+      currentSequence = (result[SEQUENCE_STORAGE_KEY] || []) as GlobalActionSequence;
+    }
     
     // Combine with current batch for real-time analysis
     const fullSequence = [...currentSequence, ...eventBatch];
@@ -976,6 +1066,7 @@ function updateActivityWindow(): void {
 
 /**
  * Determines if training should be performed based on dynamic conditions.
+ * Phase 2.1: Enhanced with idle state awareness
  */
 function shouldPerformTraining(sequence: GlobalActionSequence): boolean {
   if (sequence.length < MIN_TRAINING_EVENTS) {
@@ -984,6 +1075,12 @@ function shouldPerformTraining(sequence: GlobalActionSequence): boolean {
   
   const now = Date.now();
   const timeSinceLastTraining = now - lastTrainingTime;
+  
+  // Phase 2.1: If user is idle, prefer idle training over immediate training
+  if (currentIdleState === 'idle' || currentIdleState === 'locked') {
+    // Don't train immediately if user is idle - let idle training handle it
+    return false;
+  }
   
   // Calculate user activity rate (events per minute)
   const recentEvents = userActivityWindow.filter(timestamp => 
@@ -1000,7 +1097,7 @@ function shouldPerformTraining(sequence: GlobalActionSequence): boolean {
   
   if (activityRate > 10) {
     // High activity: train less frequently to avoid performance impact
-    dynamicInterval = TRAINING_INTERVAL * 2;
+    dynamicInterval = TRAINING_INTERVAL * 3; // Even less frequent during high activity
   } else if (activityRate < 1) {
     // Low activity: train more frequently for better responsiveness
     dynamicInterval = Math.max(TRAINING_INTERVAL / 2, MIN_TRAINING_EVENTS);
@@ -1010,10 +1107,14 @@ function shouldPerformTraining(sequence: GlobalActionSequence): boolean {
   const eventsSinceTraining = sequence.length % dynamicInterval === 0;
   
   // Also check minimum time between trainings (prevent too frequent training)
-  const minTimeBetweenTraining = 30000; // 30 seconds
+  const minTimeBetweenTraining = 45000; // 45 seconds (increased from 30)
   const timeCondition = timeSinceLastTraining > minTimeBetweenTraining;
   
-  return eventsSinceTraining && timeCondition;
+  // Additional condition: only train during active state if it's been a long time since last training
+  const emergencyTrainingThreshold = 300000; // 5 minutes
+  const emergencyTraining = timeSinceLastTraining > emergencyTrainingThreshold;
+  
+  return (eventsSinceTraining && timeCondition) || emergencyTraining;
 }
 
 /**
@@ -1101,6 +1202,148 @@ async function performIdleTraining(sequence: GlobalActionSequence): Promise<void
 }
 
 /**
+ * Phase 2.1: Initialize Chrome Idle API for intelligent training scheduling
+ */
+function initializeIdleDetection(): void {
+  try {
+    // Set up idle detection interval
+    chrome.idle.setDetectionInterval(IDLE_DETECTION_INTERVAL);
+    
+    // Listen for idle state changes
+    chrome.idle.onStateChanged.addListener((state: chrome.idle.IdleState) => {
+      handleIdleStateChange(state);
+    });
+    
+    // Get initial idle state
+    chrome.idle.queryState(IDLE_DETECTION_INTERVAL, (state: chrome.idle.IdleState) => {
+      currentIdleState = state;
+      console.log(`[Synapse] Initial idle state: ${state}`);
+    });
+    
+    console.log('[Synapse] Chrome Idle API initialized for intelligent training scheduling');
+  } catch (error) {
+    console.error('[Synapse] Failed to initialize Chrome Idle API:', error);
+  }
+}
+
+/**
+ * Phase 2.1: Handle idle state changes for optimal training timing
+ */
+async function handleIdleStateChange(newState: chrome.idle.IdleState): Promise<void> {
+  const previousState = currentIdleState;
+  currentIdleState = newState;
+  
+  console.log(`[Synapse] Idle state changed: ${previousState} → ${newState}`);
+  
+  switch (newState) {
+    case 'idle':
+      // User became idle - perfect time for training
+      await handleUserBecameIdle();
+      break;
+      
+    case 'active':
+      // User became active - stop any pending training
+      handleUserBecameActive();
+      break;
+      
+    case 'locked':
+      // Screen locked - also a good time for training
+      await handleUserBecameIdle();
+      break;
+  }
+}
+
+/**
+ * Handle when user becomes idle - trigger ML training
+ */
+async function handleUserBecameIdle(): Promise<void> {
+  try {
+    // Get recent events for training
+    let trainingSequence: GlobalActionSequence = [];
+    
+    if (dbManager) {
+      // Get recent events from IndexedDB
+      trainingSequence = await dbManager.getRecentEvents(1000);
+    } else {
+      // Fallback to chrome.storage.session
+      const result = await new Promise<{ [key: string]: any }>(resolve => {
+        chrome.storage.session.get([SEQUENCE_STORAGE_KEY], resolve);
+      });
+      trainingSequence = result[SEQUENCE_STORAGE_KEY] || [];
+    }
+    
+    // Add current batch to training data
+    if (eventBatch.length > 0) {
+      trainingSequence.push(...eventBatch);
+    }
+    
+    // Only train if we have sufficient data
+    if (trainingSequence.length >= MIN_TRAINING_EVENTS) {
+      console.log(`[Synapse] Starting idle-time training with ${trainingSequence.length} events`);
+      
+      // Store pending training data
+      pendingTrainingData = trainingSequence;
+      
+      // Perform training during idle time
+      await performIdleTrainingOptimized(trainingSequence);
+      
+      // Update last training time
+      lastTrainingTime = Date.now();
+    } else {
+      console.log(`[Synapse] Insufficient events for idle training (${trainingSequence.length} < ${MIN_TRAINING_EVENTS})`);
+    }
+  } catch (error) {
+    console.error('[Synapse] Error during idle training:', error);
+  }
+}
+
+/**
+ * Handle when user becomes active - pause training
+ */
+function handleUserBecameActive(): void {
+  // Clear any pending training operations
+  pendingTrainingData = null;
+  
+  // Note: We don't interrupt ongoing training as it's already in a Web Worker
+  // and won't affect user experience
+  console.log('[Synapse] User became active - training will continue in background');
+}
+
+/**
+ * Optimized idle training that respects system resources
+ */
+async function performIdleTrainingOptimized(sequence: GlobalActionSequence): Promise<void> {
+  try {
+    // Check if user is still idle before starting intensive operations
+    chrome.idle.queryState(IDLE_DETECTION_INTERVAL, async (state: chrome.idle.IdleState) => {
+      if (state === 'active') {
+        console.log('[Synapse] User became active, skipping intensive training');
+        return;
+      }
+      
+      // Proceed with training since user is still idle
+      await performIdleTraining(sequence);
+      
+      // Additional ML operations during idle time
+      if (mlWorkerReady) {
+        // Send additional analysis tasks to worker during idle time
+        mlWorker.postMessage({
+          type: 'analyze_patterns',
+          payload: { sequence, priority: 'low' }
+        });
+        
+        mlWorker.postMessage({
+          type: 'optimize_model',
+          payload: { priority: 'low' }
+        });
+      }
+    });
+  } catch (error) {
+    console.error('[Synapse] Error in optimized idle training:', error);
+  }
+}
+
+/**
  * Main message listener for events from content scripts and popups.
  */
 chrome.runtime.onMessage.addListener((message: RawUserAction | { type: string }, sender, sendResponse) => {
@@ -1154,10 +1397,17 @@ chrome.runtime.onMessage.addListener((message: RawUserAction | { type: string },
   }
 
   if (message.type === 'clearSequence') {
-    chrome.storage.session.set({ [SEQUENCE_STORAGE_KEY]: [] }, () => {
+    (async () => {
+      if (dbManager) {
+        await dbManager.clearAllEvents();
+      } else {
+        chrome.storage.session.set({ [SEQUENCE_STORAGE_KEY]: [] }, () => {});
+      }
+      eventBatch = [];
+      sequenceSize = 0;
       console.log('[Synapse] Global action sequence cleared.');
       sendResponse({ success: true });
-    });
+    })();
     return true; // Indicate async response
   }
 
@@ -1327,8 +1577,14 @@ async function initializePauseState(): Promise<void> {
 
 console.log('[Synapse] Background script loaded and ready.');
 
+// Initialize IndexedDB first
+initializeDatabase();
+
 // Initialize pause state
 initializePauseState();
+
+// Phase 2.1: Initialize Chrome Idle API
+initializeIdleDetection();
 
 // Long-lived connections for real-time popup updates
 const popupConnections = new Set<chrome.runtime.Port>();
@@ -1363,16 +1619,26 @@ async function handlePopupMessage(port: chrome.runtime.Port, message: any): Prom
     
     switch (type) {
       case 'requestInitialData':
-        // Send all initial data to popup
-        const sequenceResult = await new Promise<{ [key: string]: any }>(resolve => {
-          chrome.storage.session.get([SEQUENCE_STORAGE_KEY], resolve);
-        });
+        // Send all initial data to popup using IndexedDB
+        let sequence: GlobalActionSequence = [];
+        
+        if (dbManager) {
+          // Get recent events for popup display (limited for performance)
+          sequence = await dbManager.getRecentEvents(100);
+        } else {
+          // Fallback to chrome.storage.session
+          const sequenceResult = await new Promise<{ [key: string]: any }>(resolve => {
+            chrome.storage.session.get([SEQUENCE_STORAGE_KEY], resolve);
+          });
+          sequence = sequenceResult[SEQUENCE_STORAGE_KEY] || [];
+        }
+        
         const predictionResult = await new Promise<{ [key: string]: any }>(resolve => {
           chrome.storage.session.get(['lastPrediction'], resolve);
         });
         
         response = {
-          sequence: sequenceResult[SEQUENCE_STORAGE_KEY] || [],
+          sequence: sequence,
           prediction: predictionResult.lastPrediction,
           pauseState: isPaused,
           modelInfo: predictor.getModelInfo(),
@@ -1387,9 +1653,19 @@ async function handlePopupMessage(port: chrome.runtime.Port, message: any): Prom
         break;
         
       case 'clearSequence':
-        await new Promise<void>(resolve => {
-          chrome.storage.session.set({ [SEQUENCE_STORAGE_KEY]: [] }, resolve);
-        });
+        if (dbManager) {
+          await dbManager.clearAllEvents();
+        } else {
+          // Fallback to chrome.storage.session
+          await new Promise<void>(resolve => {
+            chrome.storage.session.set({ [SEQUENCE_STORAGE_KEY]: [] }, resolve);
+          });
+        }
+        
+        // Clear event batch as well
+        eventBatch = [];
+        sequenceSize = 0;
+        
         response = { success: true };
         
         // Notify all connected popups
