@@ -34,6 +34,8 @@ interface TimeContext {
   isWeekend: boolean;
   timePeriod: string;
   timestamp: number;
+  intervalSinceLastEvent?: number; // Phase 3.3: Time interval between events
+  dailyEventCount?: number; // Phase 3.3: Count of events today
 }
 
 interface SpatialContext {
@@ -49,6 +51,9 @@ interface SemanticContext {
   pageType: string;
   elementType: string;
   intentCategory: string;
+  pageTitle?: string; // Phase 3.3: Page title for content context
+  keywordsExtracted?: string[]; // Phase 3.3: Key words from page content
+  languageDetected?: string; // Phase 3.3: Language detection
 }
 
 interface BehavioralContext {
@@ -274,14 +279,17 @@ class WorkerTokenizer {
  * Rich context feature extractor for enhanced ML predictions
  */
 class ContextExtractor {
+  private lastEventTimestamp: number = 0;
+  private dailyEventCounts: Map<string, number> = new Map(); // Track daily event counts
+  
   /**
-   * Extract rich contextual features from events
+   * Extract rich contextual features from events (Phase 3.3 Enhanced)
    */
-  public extractRichFeatures(event: EnrichedEvent): RichContextFeatures {
+  public extractRichFeatures(event: EnrichedEvent, previousEvents?: EnrichedEvent[]): RichContextFeatures {
     const baseToken = this.getBaseToken(event);
-    const timeFeatures = this.extractTimeFeatures(event.timestamp);
+    const timeFeatures = this.extractEnhancedTimeFeatures(event.timestamp, previousEvents);
     const spatialFeatures = this.extractSpatialFeatures(event);
-    const semanticFeatures = this.extractSemanticFeatures(event);
+    const semanticFeatures = this.extractEnhancedSemanticFeatures(event);
     const behavioralFeatures = this.extractBehavioralFeatures(event);
     
     return {
@@ -315,11 +323,15 @@ class ContextExtractor {
     }
   }
 
-  private extractTimeFeatures(timestamp: number): TimeContext {
+  /**
+   * Phase 3.3: Enhanced time feature extraction with intervals and daily counts
+   */
+  private extractEnhancedTimeFeatures(timestamp: number, previousEvents?: EnrichedEvent[]): TimeContext {
     const date = new Date(timestamp);
     const hour = date.getHours();
     const dayOfWeek = date.getDay();
     const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+    const dateKey = date.toDateString();
     
     let timePeriod: string;
     if (hour >= 6 && hour < 12) timePeriod = 'morning';
@@ -327,12 +339,33 @@ class ContextExtractor {
     else if (hour >= 18 && hour < 22) timePeriod = 'evening';
     else timePeriod = 'night';
     
+    // Calculate interval since last event
+    let intervalSinceLastEvent = 0;
+    if (this.lastEventTimestamp > 0) {
+      intervalSinceLastEvent = timestamp - this.lastEventTimestamp;
+    }
+    this.lastEventTimestamp = timestamp;
+    
+    // Update daily event count
+    const currentCount = this.dailyEventCounts.get(dateKey) || 0;
+    this.dailyEventCounts.set(dateKey, currentCount + 1);
+    
+    // Clean old daily counts (keep only last 7 days)
+    const cutoffDate = new Date(timestamp - 7 * 24 * 60 * 60 * 1000);
+    for (const [key, _] of this.dailyEventCounts.entries()) {
+      if (new Date(key) < cutoffDate) {
+        this.dailyEventCounts.delete(key);
+      }
+    }
+    
     return {
       hour,
       dayOfWeek,
       isWeekend,
       timePeriod,
-      timestamp
+      timestamp,
+      intervalSinceLastEvent,
+      dailyEventCount: this.dailyEventCounts.get(dateKey)
     };
   }
 
@@ -363,7 +396,10 @@ class ContextExtractor {
     return spatial;
   }
 
-  private extractSemanticFeatures(event: EnrichedEvent): SemanticContext {
+  /**
+   * Phase 3.3: Enhanced semantic feature extraction with content features
+   */
+  private extractEnhancedSemanticFeatures(event: EnrichedEvent): SemanticContext {
     const semantic: SemanticContext = {
       domain: 'unknown',
       pageType: 'general',
@@ -380,6 +416,13 @@ class ContextExtractor {
       } catch (error) {
         // Invalid URL, use defaults
       }
+    }
+    
+    // Phase 3.3: Extract page title for content features
+    if (event.context.tabInfo?.title) {
+      semantic.pageTitle = event.context.tabInfo.title;
+      semantic.keywordsExtracted = this.extractKeywordsFromTitle(event.context.tabInfo.title);
+      semantic.languageDetected = this.detectLanguage(event.context.tabInfo.title);
     }
     
     // Extract element type and intent
@@ -517,6 +560,43 @@ class ContextExtractor {
     
     return 'interaction';
   }
+
+  /**
+   * Phase 3.3: Extract keywords from page title for content features
+   */
+  private extractKeywordsFromTitle(title: string): string[] {
+    // Simple keyword extraction - remove common words and split
+    const stopWords = new Set(['the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'from', 'as', 'is', 'was', 'are', 'were', 'been', 'be', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should']);
+    
+    const words = title.toLowerCase()
+      .replace(/[^\w\s]/g, '') // Remove punctuation
+      .split(/\s+/)
+      .filter(word => word.length > 2 && !stopWords.has(word));
+    
+    // Return top 5 keywords
+    return words.slice(0, 5);
+  }
+
+  /**
+   * Phase 3.3: Simple language detection based on character patterns
+   */
+  private detectLanguage(text: string): string {
+    // Simple heuristic-based language detection
+    const chineseRegex = /[\u4e00-\u9fff]/;
+    const japaneseRegex = /[\u3040-\u309f\u30a0-\u30ff]/;
+    const koreanRegex = /[\uac00-\ud7af]/;
+    const arabicRegex = /[\u0600-\u06ff]/;
+    const cyrillicRegex = /[\u0400-\u04ff]/;
+    
+    if (chineseRegex.test(text)) return 'chinese';
+    if (japaneseRegex.test(text)) return 'japanese';
+    if (koreanRegex.test(text)) return 'korean';
+    if (arabicRegex.test(text)) return 'arabic';
+    if (cyrillicRegex.test(text)) return 'russian';
+    
+    // Default to English for Latin scripts
+    return 'english';
+  }
 }
 
 /**
@@ -611,7 +691,7 @@ class EnhancedMLEngine {
   private model: any = null;
   private sequenceLength: number = 10;
   private contextExtractor: ContextExtractor;
-  private incrementalLearner: IncrementalLearner;
+  public incrementalLearner: IncrementalLearner;
   private isInitialized: boolean = false;
 
   constructor() {
@@ -739,8 +819,10 @@ class EnhancedMLEngine {
   }
 
   private buildEnhancedVocabulary(sequence: GlobalActionSequence): void {
-    const enhancedTokens = sequence.map(event => {
-      const features = this.contextExtractor.extractRichFeatures(event);
+    const enhancedTokens = sequence.map((event, index) => {
+      // Phase 3.3: Pass previous events for enhanced context
+      const previousEvents = index > 0 ? sequence.slice(Math.max(0, index - 5), index) : undefined;
+      const features = this.contextExtractor.extractRichFeatures(event, previousEvents);
       return features.primaryToken;
     });
     
@@ -788,7 +870,7 @@ class EnhancedMLEngine {
     return { xs, ys };
   }
 
-  private async performIncrementalLearning(): Promise<void> {
+  public async performIncrementalLearning(): Promise<void> {
     const incrementalData = this.incrementalLearner.prepareIncrementalBatch(
       this.contextExtractor, 
       this.vocabulary
@@ -1076,6 +1158,46 @@ self.onmessage = async (event) => {
       type: 'skills_result', 
       skills 
     });
+  }
+
+  // Phase 3.2: Handle incremental learning requests
+  if (type === 'incremental_learn') {
+    const startTime = performance.now();
+    console.log('[Enhanced ML Worker] Starting incremental learning...');
+    
+    try {
+      // Add experiences to incremental learner
+      for (const experience of payload.experiences) {
+        enhancedMLEngine.incrementalLearner.addExperience(experience);
+      }
+      
+      // Perform incremental learning if ready
+      const learningMetrics = enhancedMLEngine.getLearningMetrics();
+      if (learningMetrics.readyForIncremental) {
+        await enhancedMLEngine.performIncrementalLearning();
+        console.log('[Enhanced ML Worker] Incremental learning completed successfully');
+      }
+      
+      const learningDuration = performance.now() - startTime;
+      
+      self.postMessage({
+        type: 'incremental_learning_complete',
+        success: true,
+        experienceCount: learningMetrics.experienceCount,
+        bufferUtilization: learningMetrics.bufferUtilization,
+        readyForIncremental: learningMetrics.readyForIncremental,
+        diversity: learningMetrics.diversity,
+        learningDuration
+      });
+    } catch (error) {
+      console.error('[Enhanced ML Worker] Incremental learning failed:', error);
+      self.postMessage({
+        type: 'incremental_learning_complete',
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+    return;
   }
 
   if (type === 'getInfo') {

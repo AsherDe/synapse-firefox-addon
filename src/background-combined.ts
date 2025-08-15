@@ -782,6 +782,30 @@ mlWorker.onmessage = (event) => {
   if (type === 'optimize_model') {
     console.log('[Background] Model optimization completed in Worker');
   }
+  
+  // Phase 3.2: Handle incremental learning results from Worker
+  if (type === 'incremental_learning_complete') {
+    if (event.data.success) {
+      console.log(`[Background] Incremental learning completed: ${event.data.experienceCount} experiences processed, buffer utilization: ${(event.data.bufferUtilization * 100).toFixed(1)}%`);
+      // Store incremental learning metrics
+      chrome.storage.session.set({
+        incrementalLearningMetrics: {
+          experienceCount: event.data.experienceCount,
+          bufferUtilization: event.data.bufferUtilization,
+          lastIncrementalUpdate: Date.now(),
+          readyForIncremental: event.data.readyForIncremental
+        }
+      });
+      
+      // Update any connected popups with new learning metrics
+      notifyPopups('learningMetricsUpdate', {
+        incrementalLearning: event.data,
+        timestamp: Date.now()
+      });
+    } else {
+      console.error('[Background] Incremental learning failed:', event.data.error);
+    }
+  }
 };
 
 // Worker error handling
@@ -948,6 +972,15 @@ async function handleMLOperations(currentSequence: GlobalActionSequence): Promis
           type: 'train', 
           payload: { sequence: currentSequence } 
         });
+        
+        // Phase 3.2: Also trigger incremental learning for recent experiences
+        if (currentSequence.length >= 10) {
+          const recentExperiences = currentSequence.slice(-50); // Use last 50 events for incremental learning
+          mlWorker.postMessage({
+            type: 'incremental_learn',
+            payload: { experiences: recentExperiences }
+          });
+        }
       } else {
         // Fallback to local ML engine
         try {
