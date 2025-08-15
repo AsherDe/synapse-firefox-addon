@@ -71,6 +71,8 @@ class MLEngine {
         return this.clickEventToToken(event as UserActionClickEvent);
       case 'user_action_keydown':
         return this.keydownEventToToken(event as UserActionKeydownEvent);
+      case 'user_action_text_input':
+        return this.textInputEventToToken(event as UserActionTextInputEvent);
       case 'browser_action_tab_activated':
         return 'tab_switch';
       case 'browser_action_tab_created':
@@ -113,6 +115,29 @@ class MLEngine {
     if (payload.key === 'Tab') return 'tab_navigation';
     
     return 'key_input';
+  }
+
+  private textInputEventToToken(event: UserActionTextInputEvent): string {
+    const payload = event.payload;
+    const inputMethod = payload.input_method || 'keyboard';
+    const elementRole = payload.features.element_role || 'textbox';
+    const pageType = payload.features.page_type || 'general';
+    
+    // 根据输入方法分类
+    switch (inputMethod) {
+      case 'ime_chinese':
+        return `text_input_chinese_${elementRole}_${pageType}`;
+      case 'ime_japanese':
+        return `text_input_japanese_${elementRole}_${pageType}`;
+      case 'ime_korean':
+        return `text_input_korean_${elementRole}_${pageType}`;
+      case 'paste':
+        return `text_paste_${elementRole}_${pageType}`;
+      case 'emoji':
+        return `emoji_input_${elementRole}_${pageType}`;
+      default:
+        return `text_input_${elementRole}_${pageType}`;
+    }
   }
 
   public async train(sequence: GlobalActionSequence): Promise<void> {
@@ -286,9 +311,26 @@ class SkillDetector {
     // Initialize with common patterns
   }
 
-  public detectSkills(events: EnrichedEvent[], tokenizer: any): ActionSkill[] {
-    // Return existing skills for now
-    return Array.from(this.skillPatterns.values());
+  public detectSkills(events: EnrichedEvent[], _tokenizer: any): ActionSkill[] {
+    // Simple skill detection based on event patterns
+    const skills: ActionSkill[] = [];
+    
+    // Look for text input patterns
+    const textInputEvents = events.filter(e => e.type === 'user_action_text_input');
+    if (textInputEvents.length > 0) {
+      const textInputSkill: ActionSkill = {
+        id: 'text_input_skill',
+        name: 'Text Input Patterns',
+        description: 'User text input behavior patterns',
+        token_sequence: [0, 1],
+        frequency: textInputEvents.length,
+        confidence: 0.9
+      };
+      skills.push(textInputSkill);
+    }
+    
+    // Combine with existing patterns
+    return skills.concat(Array.from(this.skillPatterns.values()));
   }
 
   public matchSkillPattern(recentEvents: EnrichedEvent[]): ActionSkill | null {
@@ -598,6 +640,64 @@ const predictor = new SimpleSequencePredictor();
 const mlEngine = new MLEngine();
 const skillDetector = new SkillDetector();
 
+// Create ML Worker instance
+const mlWorker = new Worker(chrome.runtime.getURL('dist/ml-worker.js'));
+let mlWorkerReady = false;
+
+// Listen for messages from ML Worker
+mlWorker.onmessage = (event) => {
+  const { type } = event.data;
+  
+  if (type === 'worker_ready') {
+    mlWorkerReady = true;
+    console.log('[Background] ML Worker is ready');
+  }
+  
+  if (type === 'training_complete') {
+    if (event.data.success) {
+      console.log(`[Background] ML Worker training completed. Vocab: ${event.data.vocabSize}, Skills: ${event.data.skillsCount}`);
+      // Store training results in session storage for popup
+      chrome.storage.session.set({
+        mlWorkerInfo: {
+          vocabSize: event.data.vocabSize,
+          skillsCount: event.data.skillsCount,
+          lastTraining: Date.now()
+        }
+      });
+    } else {
+      console.error('[Background] ML Worker training failed:', event.data.error);
+    }
+  }
+  
+  if (type === 'prediction_result') {
+    if (event.data.prediction) {
+      console.log(`[Background] ML Worker prediction: ${event.data.prediction.token} (confidence: ${(event.data.prediction.confidence * 100).toFixed(1)}%)`);
+      // Store worker prediction
+      chrome.storage.session.set({ 
+        lastPrediction: {
+          token: event.data.prediction.token,
+          confidence: event.data.prediction.confidence,
+          timestamp: Date.now(),
+          type: 'worker'
+        }
+      });
+    }
+  }
+  
+  if (type === 'skills_result') {
+    // Store skills from worker
+    chrome.storage.session.set({
+      workerSkills: event.data.skills.slice(0, 10)
+    });
+  }
+};
+
+// Worker error handling
+mlWorker.onerror = (error) => {
+  console.error('[Background] ML Worker error:', error);
+  mlWorkerReady = false;
+};
+
 /**
  * Adds a new event to the global sequence in session storage.
  * @param event The enriched event to add.
@@ -646,22 +746,31 @@ async function handleMLOperations(currentSequence: GlobalActionSequence): Promis
       // Train simple predictor (backward compatibility)
       await predictor.trainOnSequence(currentSequence);
       
-      // Train advanced ML engine with generalized features
-      try {
-        await mlEngine.train(currentSequence);
-        console.log('[Synapse] Advanced ML engine training completed');
-        
-        // Detect and analyze skills
-        const detectedSkills = skillDetector.detectSkills(currentSequence, mlEngine);
-        console.log(`[Synapse] Detected ${detectedSkills.length} behavioral skills`);
-        
-        // Store skills for popup display
-        chrome.storage.session.set({
-          detectedSkills: detectedSkills.slice(0, 10), // Store top 10 skills
-          skillStats: skillDetector.getSkillStats()
+      // Train ML Worker if available, otherwise fallback to local ML engine
+      if (mlWorkerReady) {
+        console.log('[Synapse] Sending sequence to ML Worker for training...');
+        mlWorker.postMessage({ 
+          type: 'train', 
+          payload: { sequence: currentSequence } 
         });
-      } catch (error) {
-        console.warn('[Synapse] Advanced ML engine training failed, falling back to simple predictor:', error);
+      } else {
+        // Fallback to local ML engine
+        try {
+          await mlEngine.train(currentSequence);
+          console.log('[Synapse] Local ML engine training completed');
+          
+          // Detect and analyze skills
+          const detectedSkills = skillDetector.detectSkills(currentSequence, mlEngine);
+          console.log(`[Synapse] Detected ${detectedSkills.length} behavioral skills`);
+          
+          // Store skills for popup display
+          chrome.storage.session.set({
+            detectedSkills: detectedSkills.slice(0, 10), // Store top 10 skills
+            skillStats: skillDetector.getSkillStats()
+          });
+        } catch (error) {
+          console.warn('[Synapse] Local ML engine training failed, falling back to simple predictor:', error);
+        }
       }
     }
 
@@ -686,29 +795,38 @@ async function handleMLOperations(currentSequence: GlobalActionSequence): Promis
         });
       }
       
-      // Try advanced ML engine prediction
-      try {
-        const advancedPrediction = await mlEngine.predict(recentEvents);
-        if (advancedPrediction) {
-          console.log(`[Synapse] Advanced ML prediction: ${advancedPrediction.token} (confidence: ${(advancedPrediction.confidence * 100).toFixed(1)}%)`);
-          
-          // Store advanced prediction
-          chrome.storage.session.set({ 
-            lastPrediction: {
-              token: advancedPrediction.token,
-              confidence: advancedPrediction.confidence,
-              timestamp: Date.now(),
-              type: 'advanced'
-            },
-            mlEngineInfo: {
-              vocabSize: mlEngine.getVocabularySize(),
-              skillsCount: mlEngine.getSkills().length
-            }
-          });
-          return; // Use advanced prediction if available
+      // Try ML Worker prediction first, then fallback to local ML engine
+      if (mlWorkerReady) {
+        mlWorker.postMessage({ 
+          type: 'predict', 
+          payload: { currentSequence: recentEvents } 
+        });
+        // Note: Response will be handled in mlWorker.onmessage
+      } else {
+        // Fallback to local ML engine prediction
+        try {
+          const advancedPrediction = await mlEngine.predict(recentEvents);
+          if (advancedPrediction) {
+            console.log(`[Synapse] Local ML prediction: ${advancedPrediction.token} (confidence: ${(advancedPrediction.confidence * 100).toFixed(1)}%)`);
+            
+            // Store advanced prediction
+            chrome.storage.session.set({ 
+              lastPrediction: {
+                token: advancedPrediction.token,
+                confidence: advancedPrediction.confidence,
+                timestamp: Date.now(),
+                type: 'local'
+              },
+              mlEngineInfo: {
+                vocabSize: mlEngine.getVocabularySize(),
+                skillsCount: mlEngine.getSkills().length
+              }
+            });
+            return; // Use local prediction if available
+          }
+        } catch (error) {
+          console.warn('[Synapse] Local ML prediction failed, falling back to simple predictor:', error);
         }
-      } catch (error) {
-        console.warn('[Synapse] Advanced prediction failed, falling back to simple predictor:', error);
       }
       
       // Fallback to simple predictor
@@ -769,6 +887,17 @@ chrome.runtime.onMessage.addListener((message: RawUserAction | { type: string },
     return;
   }
 
+  if (type === 'user_action_text_input') {
+    const event: UserActionTextInputEvent = {
+      type,
+      payload: (message as RawUserAction).payload as UserActionTextInputPayload,
+      timestamp: Date.now(),
+      context,
+    };
+    addEventToSequence(event);
+    return;
+  }
+
   // Handle requests from the popup
   if (type === 'getSequence') {
     chrome.storage.session.get([SEQUENCE_STORAGE_KEY], (result) => {
@@ -794,23 +923,52 @@ chrome.runtime.onMessage.addListener((message: RawUserAction | { type: string },
 
   if (message.type === 'getModelInfo') {
     const simpleModelInfo = predictor.getModelInfo();
-    const advancedModelInfo = {
-      vocabSize: mlEngine.getVocabularySize(),
-      skillsCount: mlEngine.getSkills().length,
-      type: 'TensorFlow.js LSTM with feature extraction'
-    };
     
-    sendResponse({ 
-      simpleModel: simpleModelInfo,
-      advancedModel: advancedModelInfo,
-      isReady: predictor.isReady() 
-    });
+    if (mlWorkerReady) {
+      chrome.storage.session.get(['mlWorkerInfo'], (result) => {
+        const workerInfo = result.mlWorkerInfo || { vocabSize: 0, skillsCount: 0 };
+        const advancedModelInfo = {
+          vocabSize: workerInfo.vocabSize,
+          skillsCount: workerInfo.skillsCount,
+          type: 'ML Worker with Web Worker isolation',
+          lastTraining: workerInfo.lastTraining
+        };
+        
+        sendResponse({ 
+          simpleModel: simpleModelInfo,
+          advancedModel: advancedModelInfo,
+          isReady: predictor.isReady(),
+          workerReady: mlWorkerReady
+        });
+      });
+    } else {
+      const advancedModelInfo = {
+        vocabSize: mlEngine.getVocabularySize(),
+        skillsCount: mlEngine.getSkills().length,
+        type: 'Local ML Engine (fallback)'
+      };
+      
+      sendResponse({ 
+        simpleModel: simpleModelInfo,
+        advancedModel: advancedModelInfo,
+        isReady: predictor.isReady(),
+        workerReady: false
+      });
+    }
     return true; // Indicate async response
   }
   
   if (message.type === 'getSkills') {
-    const skills = mlEngine.getSkills();
-    sendResponse({ skills });
+    if (mlWorkerReady) {
+      mlWorker.postMessage({ type: 'getSkills' });
+      // Response will be stored in session storage by worker message handler
+      chrome.storage.session.get(['workerSkills'], (result) => {
+        sendResponse({ skills: result.workerSkills || [] });
+      });
+    } else {
+      const skills = mlEngine.getSkills();
+      sendResponse({ skills });
+    }
     return true; // Indicate async response
   }
 

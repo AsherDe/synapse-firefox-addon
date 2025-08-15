@@ -8,8 +8,8 @@
 
 // The core structure for any event message sent from a content script
 interface RawUserAction {
-  type: 'user_action_click' | 'user_action_keydown';
-  payload: UserActionClickPayload | UserActionKeydownPayload | ExtendedUserActionClickPayload | ExtendedUserActionKeydownPayload;
+  type: 'user_action_click' | 'user_action_keydown' | 'user_action_text_input';
+  payload: UserActionClickPayload | UserActionKeydownPayload | UserActionTextInputPayload | ExtendedUserActionClickPayload | ExtendedUserActionKeydownPayload;
 }
 
 interface UserActionClickPayload {
@@ -23,6 +23,15 @@ interface UserActionKeydownPayload {
   key: string;
   code: string;
   url: string;
+}
+
+interface UserActionTextInputPayload {
+  text: string;
+  selector: string;
+  url: string;
+  input_method?: string; // 'keyboard', 'ime', 'paste', etc.
+  features: GeneralizedEventFeatures;
+  duration?: number; // 输入持续时间(毫秒)
 }
 
 // The core structure for any browser-level event captured by the background script
@@ -78,6 +87,11 @@ type UserActionKeydownEvent = BaseEvent & {
   payload: UserActionKeydownPayload;
 };
 
+type UserActionTextInputEvent = BaseEvent & {
+  type: 'user_action_text_input';
+  payload: UserActionTextInputPayload;
+};
+
 type BrowserActionTabCreatedEvent = BaseEvent & {
   type: 'browser_action_tab_created';
   payload: TabCreatedPayload;
@@ -102,6 +116,7 @@ type BrowserActionTabRemovedEvent = BaseEvent & {
 type EnrichedEvent =
   | UserActionClickEvent
   | UserActionKeydownEvent
+  | UserActionTextInputEvent
   | BrowserActionTabCreatedEvent
   | BrowserActionTabActivatedEvent
   | BrowserActionTabUpdatedEvent
