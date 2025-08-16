@@ -16,6 +16,7 @@
     "src/popup.ts",
     "src/tokenizer.ts",
     "src/ml-worker.ts",
+    "src/smart-assistant.ts",
     "src/types.ts"
   ],
   "exclude": ["node_modules", "dist"]

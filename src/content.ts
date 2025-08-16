@@ -1073,4 +1073,52 @@ function initializeAllEventMonitoring(): void {
 // Initialize all event monitoring
 initializeAllEventMonitoring();
 
-console.log('[Synapse] Content script loaded with complete event monitoring suite.');
+// Initialize smart assistant
+let smartAssistantScript: HTMLScriptElement | null = null;
+
+function initializeSmartAssistant(): void {
+  // Check if smart assistant is enabled
+  chrome.storage.local.get(['assistantEnabled'], (result) => {
+    const isEnabled = result.assistantEnabled !== false; // Default to true
+    
+    if (isEnabled && !smartAssistantScript) {
+      // Load smart assistant script
+      smartAssistantScript = document.createElement('script');
+      smartAssistantScript.src = chrome.runtime.getURL('dist/smart-assistant.js');
+      smartAssistantScript.onload = () => {
+        console.log('[Synapse] Smart assistant loaded');
+      };
+      smartAssistantScript.onerror = (error) => {
+        console.error('[Synapse] Failed to load smart assistant:', error);
+      };
+      document.head.appendChild(smartAssistantScript);
+    } else if (!isEnabled && smartAssistantScript) {
+      // Remove smart assistant if disabled
+      smartAssistantScript.remove();
+      smartAssistantScript = null;
+      
+      // Also remove the assistant UI if it exists
+      const assistantElement = document.getElementById('synapse-smart-assistant');
+      if (assistantElement) {
+        assistantElement.remove();
+      }
+      
+      console.log('[Synapse] Smart assistant disabled and removed');
+    }
+  });
+}
+
+// Listen for guidance toggle messages
+chrome.runtime.onMessage.addListener((message, _sender, _sendResponse) => {
+  if (message.type === 'guidanceToggled') {
+    // Re-initialize smart assistant based on new setting
+    setTimeout(() => {
+      initializeSmartAssistant();
+    }, 100);
+  }
+});
+
+// Initialize smart assistant
+initializeSmartAssistant();
+
+console.log('[Synapse] Content script loaded with complete event monitoring suite and smart assistant.');

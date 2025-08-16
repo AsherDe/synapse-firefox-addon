@@ -1413,7 +1413,7 @@ async function performIdleTrainingOptimized(sequence: GlobalActionSequence): Pro
 /**
  * Main message listener for events from content scripts and popups.
  */
-chrome.runtime.onMessage.addListener((message: RawUserAction | { type: string }, sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message: RawUserAction | { type: string; data?: any; enabled?: boolean }, sender, sendResponse) => {
   const { type } = message;
 
   const context = {
@@ -1564,6 +1564,52 @@ chrome.runtime.onMessage.addListener((message: RawUserAction | { type: string },
     return true; // Indicate async response
   }
 
+  // Smart Assistant message handling
+  if (message.type === 'getLearnedSkills') {
+    const skills = mlEngine?.getSkills() || [];
+    sendResponse({ skills });
+    return true;
+  }
+
+  if (message.type === 'suggestionExecuted') {
+    // Log executed suggestion for learning
+    console.log('[Synapse] Suggestion executed:', message.data);
+    // TODO: Store execution history for learning
+    sendResponse({ success: true });
+    return true;
+  }
+
+  if (message.type === 'suggestionRejected') {
+    // Log rejected suggestion for learning
+    console.log('[Synapse] Suggestion rejected:', message.data);
+    // TODO: Update model based on rejection
+    sendResponse({ success: true });
+    return true;
+  }
+
+  if (message.type === 'feedbackSubmitted') {
+    // Process user feedback
+    console.log('[Synapse] User feedback received:', message.data);
+    // TODO: Use feedback to improve suggestions
+    sendResponse({ success: true });
+    return true;
+  }
+
+  if (message.type === 'actionsRolledBack') {
+    // Handle rollback and start learning mode
+    console.log('[Synapse] Actions rolled back, entering learning mode:', message.data);
+    // TODO: Monitor subsequent user actions for learning
+    sendResponse({ success: true });
+    return true;
+  }
+
+  if (message.type === 'guidanceToggled') {
+    // Handle guidance toggle
+    console.log('[Synapse] Guidance toggled:', message.enabled);
+    sendResponse({ success: true });
+    return true;
+  }
+
   return false; // No async response
 });
 
@@ -1681,8 +1727,9 @@ initializeIdleDetection();
 
 // Long-lived connections for real-time popup updates
 const popupConnections = new Set<chrome.runtime.Port>();
+const assistantConnections = new Set<chrome.runtime.Port>();
 
-// Handle long-lived connections from popup
+// Handle long-lived connections from popup and smart assistant
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name === 'popup') {
     console.log('[Synapse] Popup connected via long-lived connection');
@@ -1698,8 +1745,96 @@ chrome.runtime.onConnect.addListener((port) => {
       console.log('[Synapse] Popup disconnected');
       popupConnections.delete(port);
     });
+  } else if (port.name === 'smart-assistant') {
+    console.log('[Synapse] Smart assistant connected via long-lived connection');
+    assistantConnections.add(port);
+    
+    // Handle messages from smart assistant
+    port.onMessage.addListener(async (message) => {
+      await handleAssistantMessage(port, message);
+    });
+    
+    // Clean up when smart assistant disconnects
+    port.onDisconnect.addListener(() => {
+      console.log('[Synapse] Smart assistant disconnected');
+      assistantConnections.delete(port);
+    });
   }
 });
+
+/**
+ * Handle messages from smart assistant via long-lived connection
+ */
+async function handleAssistantMessage(port: chrome.runtime.Port, message: any): Promise<void> {
+  try {
+    switch (message.type) {
+      case 'getLearnedSkills':
+        const skills = mlEngine?.getSkills() || [];
+        port.postMessage({ 
+          type: 'learnedSkills', 
+          data: skills,
+          messageId: message.messageId 
+        });
+        break;
+        
+      case 'userAction':
+        // Process user action for pattern detection
+        // TODO: Implement pattern detection logic
+        console.log('[Synapse] User action received from assistant:', message.data);
+        break;
+        
+      case 'suggestionExecuted':
+        // Log executed suggestion for learning
+        console.log('[Synapse] Suggestion executed:', message.data);
+        port.postMessage({ 
+          type: 'suggestionResult', 
+          data: { success: true },
+          messageId: message.messageId 
+        });
+        break;
+        
+      case 'suggestionRejected':
+        // Log rejected suggestion for learning
+        console.log('[Synapse] Suggestion rejected:', message.data);
+        port.postMessage({ 
+          type: 'suggestionResult', 
+          data: { success: true },
+          messageId: message.messageId 
+        });
+        break;
+        
+      case 'feedbackSubmitted':
+        // Process user feedback
+        console.log('[Synapse] User feedback received:', message.data);
+        port.postMessage({ 
+          type: 'suggestionResult', 
+          data: { success: true },
+          messageId: message.messageId 
+        });
+        break;
+        
+      case 'actionsRolledBack':
+        // Handle rollback and start learning mode
+        console.log('[Synapse] Actions rolled back, entering learning mode:', message.data);
+        port.postMessage({ 
+          type: 'suggestionResult', 
+          data: { success: true },
+          messageId: message.messageId 
+        });
+        break;
+        
+      default:
+        console.warn('[Synapse] Unknown assistant message type:', message.type);
+    }
+  } catch (error) {
+    console.error('[Synapse] Error handling assistant message:', error);
+    port.postMessage({ 
+      type: 'error', 
+      error: error instanceof Error ? error.message : 'Unknown error',
+      messageId: message.messageId 
+    });
+  }
+}
 
 /**
  * Handle messages from popup via long-lived connection

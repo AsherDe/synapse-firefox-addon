@@ -370,6 +370,80 @@
             overflow-y: auto;
             white-space: pre-wrap;
         }
+
+        .guidance-container {
+            background: white;
+            border-radius: 4px;
+            padding: 12px;
+            margin-bottom: 15px;
+            border: 1px solid #dadce0;
+        }
+
+        .guidance-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+
+        .guidance-header h4 {
+            margin: 0;
+            font-size: 14px;
+            color: #3c4043;
+            font-weight: 600;
+        }
+
+        .guidance-description {
+            margin: 0;
+            font-size: 12px;
+            color: #5f6368;
+            line-height: 1.4;
+        }
+
+        .toggle-switch {
+            position: relative;
+            display: inline-block;
+            width: 44px;
+            height: 24px;
+        }
+
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #ccc;
+            transition: .4s;
+            border-radius: 24px;
+        }
+
+        .slider:before {
+            position: absolute;
+            content: "";
+            height: 18px;
+            width: 18px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            transition: .4s;
+            border-radius: 50%;
+        }
+
+        input:checked + .slider {
+            background-color: #1a73e8;
+        }
+
+        input:checked + .slider:before {
+            transform: translateX(20px);
+        }
     </style>
 </head>
 <body>
@@ -382,6 +456,17 @@
         <button id="toggleBtn" class="btn btn-primary">Pause</button>
         <button id="clearBtn" class="btn btn-secondary">Clear</button>
         <button id="devModeBtn" class="btn btn-secondary">Dev Mode</button>
+    </div>
+    
+    <div class="guidance-container">
+        <div class="guidance-header">
+            <h4>Smart Guidance</h4>
+            <label class="toggle-switch">
+                <input type="checkbox" id="guidanceToggle" checked>
+                <span class="slider"></span>
+            </label>
+        </div>
+        <p class="guidance-description">Enable AI-powered operation suggestions based on learned patterns</p>
     </div>
 
     <div class="model-info">

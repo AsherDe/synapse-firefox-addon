@@ -71,20 +71,20 @@ class FeasibilityAnalyzer:
         # DCT系数能量分布
         plt.subplot(2, 3, 1)
         plt.plot(np.abs(x_dct), 'o-', markersize=4)
-        plt.axvline(n_coeffs_to_keep, color='r', linestyle='--', label=f'前{n_coeffs_to_keep}个系数')
-        plt.title('DCT系数能量分布 (X轴)')
-        plt.xlabel('系数索引')
-        plt.ylabel('系数绝对值')
+        plt.axvline(n_coeffs_to_keep, color='r', linestyle='--', label=f'First {n_coeffs_to_keep} coeffs')
+        plt.title('(A) DCT Coefficient Energy Distribution (X-axis)')
+        plt.xlabel('Coefficient Index')
+        plt.ylabel('Coefficient Magnitude')
         plt.yscale('log')
         plt.legend()
         plt.grid(True, alpha=0.3)
         
         plt.subplot(2, 3, 2)
         plt.plot(np.abs(y_dct), 'o-', markersize=4)
-        plt.axvline(n_coeffs_to_keep, color='r', linestyle='--', label=f'前{n_coeffs_to_keep}个系数')
-        plt.title('DCT系数能量分布 (Y轴)')
-        plt.xlabel('系数索引')
-        plt.ylabel('系数绝对值')
+        plt.axvline(n_coeffs_to_keep, color='r', linestyle='--', label=f'First {n_coeffs_to_keep} coeffs')
+        plt.title('(B) DCT Coefficient Energy Distribution (Y-axis)')
+        plt.xlabel('Coefficient Index')
+        plt.ylabel('Coefficient Magnitude')
         plt.yscale('log')
         plt.legend()
         plt.grid(True, alpha=0.3)
@@ -139,15 +139,15 @@ class FeasibilityAnalyzer:
             errors.append(error)
 
         plt.plot(coeff_counts, errors, 'b-o', markersize=4)
-        plt.title('轨迹重建误差 vs. DCT系数数量')
-        plt.xlabel('保留的系数数量')
-        plt.ylabel('均方根误差 (RMSE)')
+        plt.title('(C) Trajectory Reconstruction Error vs. DCT Coefficient Count')
+        plt.xlabel('Number of Coefficients Retained')
+        plt.ylabel('Root Mean Square Error (RMSE)')
         plt.grid(True, alpha=0.3)
         
         # 标注关键点
         if len(errors) > 10:
             idx_10 = 9  # 10个系数的位置
-            plt.annotate(f'10系数: {errors[idx_10]:.1f}px', 
+            plt.annotate(f'10 coeffs: {errors[idx_10]:.1f}px', 
                         xy=(10, errors[idx_10]), 
                         xytext=(15, errors[idx_10] + max(errors)*0.1),
                         arrowprops=dict(arrowstyle='->', color='red'))
@@ -170,13 +170,13 @@ class FeasibilityAnalyzer:
         x_recon = idct(x_dct_truncated, type=2, norm='ortho')
         y_recon = idct(y_dct_truncated, type=2, norm='ortho')
         
-        plt.plot(trail[:, 0], trail[:, 1], 'b-', label='原始轨迹', linewidth=2)
-        plt.plot(x_recon, y_recon, 'r--', label=f'重建轨迹({n_coeffs}系数)', linewidth=2)
-        plt.scatter(trail[0, 0], trail[0, 1], color='green', s=100, label='起点', zorder=5)
-        plt.scatter(trail[-1, 0], trail[-1, 1], color='red', s=100, label='终点', zorder=5)
-        plt.title(f'轨迹重建对比 (保留{n_coeffs}个DCT系数)')
-        plt.xlabel('X坐标 (像素)')
-        plt.ylabel('Y坐标 (像素)')
+        plt.plot(trail[:, 0], trail[:, 1], 'b-', label='Original Trajectory', linewidth=2)
+        plt.plot(x_recon, y_recon, 'r--', label=f'Reconstructed ({n_coeffs} coeffs)', linewidth=2)
+        plt.scatter(trail[0, 0], trail[0, 1], color='green', s=100, label='Start', zorder=5)
+        plt.scatter(trail[-1, 0], trail[-1, 1], color='red', s=100, label='End', zorder=5)
+        plt.title(f'(D) Trajectory Reconstruction Comparison ({n_coeffs} DCT coeffs)')
+        plt.xlabel('X Coordinate (pixels)')
+        plt.ylabel('Y Coordinate (pixels)')
         plt.legend()
         plt.grid(True, alpha=0.3)
         plt.axis('equal')
@@ -198,14 +198,14 @@ class FeasibilityAnalyzer:
             compression_ratios.append(compression_ratio)
         
         plt.plot(coeff_counts, compression_ratios, 'g-o', markersize=4)
-        plt.title('压缩率 vs. DCT系数数量')
-        plt.xlabel('保留的系数数量')
-        plt.ylabel('压缩率 (原始大小/压缩大小)')
+        plt.title('(E) Compression Ratio vs. DCT Coefficient Count')
+        plt.xlabel('Number of Coefficients Retained')
+        plt.ylabel('Compression Ratio (Original Size / Compressed Size)')
         plt.grid(True, alpha=0.3)
         
         # 标注一些关键点
         if len(compression_ratios) > 10:
-            plt.annotate(f'10系数: {compression_ratios[9]:.1f}x压缩', 
+            plt.annotate(f'10 coeffs: {compression_ratios[9]:.1f}x compression', 
                         xy=(10, compression_ratios[9]), 
                         xytext=(15, compression_ratios[9] + max(compression_ratios)*0.1),
                         arrowprops=dict(arrowstyle='->', color='green'))
@@ -213,9 +213,9 @@ class FeasibilityAnalyzer:
     def analyze_multiple_trails(self):
         """分析多个轨迹的平均性能"""
         if len(self.mouse_trails) < 2:
-            plt.text(0.5, 0.5, '轨迹数量不足\n无法进行多轨迹分析', 
+            plt.text(0.5, 0.5, 'Insufficient trajectories\nfor multi-trajectory analysis', 
                     ha='center', va='center', transform=plt.gca().transAxes)
-            plt.title('多轨迹平均性能分析')
+            plt.title('(F) Multi-trajectory Average Performance Analysis')
             return
             
         n_trails = min(len(self.mouse_trails), 5)  # 最多分析5个轨迹
@@ -260,18 +260,18 @@ class FeasibilityAnalyzer:
         
         # 绘制误差带
         plt.fill_between(coeff_counts, mean_errors - std_errors, mean_errors + std_errors, 
-                        alpha=0.3, color='blue', label='误差范围')
-        plt.plot(coeff_counts, mean_errors, 'b-o', markersize=4, label='平均重建误差')
+                        alpha=0.3, color='blue', label='Error Range')
+        plt.plot(coeff_counts, mean_errors, 'b-o', markersize=4, label='Average Reconstruction Error')
         
         # 添加能量比例的第二个y轴
         ax2 = plt.gca().twinx()
-        ax2.plot(coeff_counts, mean_energy_ratios, 'r-s', markersize=4, label='平均能量保持率')
-        ax2.set_ylabel('能量保持率', color='red')
+        ax2.plot(coeff_counts, mean_energy_ratios, 'r-s', markersize=4, label='Average Energy Retention')
+        ax2.set_ylabel('Energy Retention Rate', color='red')
         ax2.tick_params(axis='y', labelcolor='red')
         
-        plt.title(f'多轨迹性能分析 (n={n_trails})')
-        plt.xlabel('保留的系数数量')
-        plt.ylabel('重建误差 (RMSE)', color='blue')
+        plt.title(f'(G) Multi-trajectory Performance Analysis (n={n_trails})')
+        plt.xlabel('Number of Coefficients Retained')
+        plt.ylabel('Reconstruction Error (RMSE)', color='blue')
         plt.grid(True, alpha=0.3)
         
         # 合并图例

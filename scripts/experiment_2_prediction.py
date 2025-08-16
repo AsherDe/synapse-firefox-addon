@@ -2,9 +2,9 @@
 """
 Synapse Experiment 2: Next Action Prediction Accuracy
 
-- 实现基线模型 (频率模型, 马尔可夫模型)
-- 训练一个简单的LSTM序列模型
-- 对比不同模型的下一动作预测准确率
+- Implement baseline models (frequency model, Markov model)
+- Train a simple LSTM sequence model
+- Compare different models' next action prediction accuracy
 """
 
 import pandas as pd
@@ -17,7 +17,7 @@ import os
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-# 可选的深度学习支持
+# Optional deep learning support
 try:
     import tensorflow as tf
     from tensorflow.keras.models import Sequential
@@ -27,8 +27,8 @@ try:
     from tensorflow.keras.callbacks import EarlyStopping
     HAS_TENSORFLOW = True
 except ImportError:
-    print("警告: 未找到TensorFlow。LSTM模型将被跳过。")
-    print("安装命令: pip install tensorflow")
+    print("Warning: TensorFlow not found. LSTM model will be skipped.")
+    print("Install command: pip install tensorflow")
     HAS_TENSORFLOW = False
 
 class PredictionExperiment:
@@ -38,25 +38,25 @@ class PredictionExperiment:
         self.prepare_data()
 
     def prepare_data(self):
-        """将事件序列转换为模型可用的格式"""
-        print("准备数据...")
+        """Convert event sequences to model-ready format"""
+        print("Preparing data...")
         
-        # 清理数据
+        # Clean data
         self.df = self.df.dropna(subset=['action_subtype'])
         
-        # 创建简化的token序列
+        # Create simplified token sequence
         self.df['token'] = self.df['action_subtype'].astype(str)
         
-        # 添加更多上下文信息到token中
+        # Add more context information to tokens
         enhanced_tokens = []
         for _, row in self.df.iterrows():
             token = row['action_subtype']
             
-            # 为点击事件添加元素角色信息
+            # Add element role information for click events
             if token == 'click' and pd.notna(row['element_role']):
                 token = f"click_{row['element_role']}"
             
-            # 为键盘事件添加修饰键信息
+            # Add modifier key information for keyboard events
             elif token == 'keydown':
                 if row['is_ctrl_key']:
                     token = "ctrl_key"
@@ -71,28 +71,28 @@ class PredictionExperiment:
         
         self.df['enhanced_token'] = enhanced_tokens
         
-        # 创建序列数据
+        # Create sequence data
         self.create_sequences()
         
-        print(f"数据准备完成:")
-        print(f"- 总事件数: {len(self.df)}")
-        print(f"- 唯一token数: {len(self.df['enhanced_token'].unique())}")
-        print(f"- 训练序列数: {len(self.X_train) if hasattr(self, 'X_train') else 0}")
+        print(f"Data preparation completed:")
+        print(f"- Total events: {len(self.df)}")
+        print(f"- Unique tokens: {len(self.df['enhanced_token'].unique())}")
+        print(f"- Training sequences: {len(self.X_train) if hasattr(self, 'X_train') else 0}")
 
     def create_sequences(self):
-        """创建输入-输出序列对"""
+        """Create input-output sequence pairs"""
         tokens = self.df['enhanced_token'].tolist()
         
-        # 创建词汇表
+        # Create vocabulary
         self.vocab = list(set(tokens))
         self.token_to_id = {token: i for i, token in enumerate(self.vocab)}
         self.id_to_token = {i: token for token, i in self.token_to_id.items()}
         
-        # 转换为数字序列
+        # Convert to numeric sequence
         token_ids = [self.token_to_id[token] for token in tokens]
         
-        # 创建滑动窗口序列
-        seq_length = 5  # 使用前5个事件预测第6个
+        # Create sliding window sequences
+        seq_length = 5  # Use previous 5 events to predict the 6th
         X, y = [], []
         
         for i in range(len(token_ids) - seq_length):
@@ -100,15 +100,15 @@ class PredictionExperiment:
             y.append(token_ids[i+seq_length])
         
         if len(X) == 0:
-            print("错误：数据太少，无法创建序列")
+            print("Error: Too little data to create sequences")
             return
         
         X = np.array(X)
         y = np.array(y)
         
-        # 分割训练和测试集
+        # Split training and test sets
         if len(X) < 10:
-            print("警告：数据量很小，结果可能不可靠")
+            print("Warning: Very small dataset, results may be unreliable")
             test_size = 0.3
         else:
             test_size = 0.2
@@ -118,14 +118,14 @@ class PredictionExperiment:
         )
 
     def run_frequency_baseline(self):
-        """运行频率基线模型"""
-        print("\n--- 频率基线模型 ---")
+        """Run frequency baseline model"""
+        print("\n--- Frequency Baseline Model ---")
         
-        # 找到最常见的token
+        # Find the most common token
         most_common_id = Counter(self.y_train).most_common(1)[0][0]
         most_common_token = self.id_to_token[most_common_id]
         
-        # 对所有测试样本预测最常见的token
+        # Predict the most common token for all test samples
         y_pred_freq = [most_common_id] * len(self.y_test)
         
         accuracy = accuracy_score(self.y_test, y_pred_freq)
@@ -134,16 +134,16 @@ class PredictionExperiment:
             'model': f'总是预测: {most_common_token}'
         }
         
-        print(f"最常见的动作: {most_common_token}")
-        print(f"Top-1 准确率: {accuracy:.3f}")
+        print(f"Most common action: {most_common_token}")
+        print(f"Top-1 accuracy: {accuracy:.3f}")
         
         return accuracy
 
     def run_markov_baseline(self):
-        """运行马尔可夫基线模型"""
-        print("\n--- 马尔可夫基线模型 ---")
+        """Run Markov baseline model"""
+        print("\n--- Markov Baseline Model ---")
         
-        # 构建转移概率矩阵
+        # Build transition probability matrix
         transitions = defaultdict(Counter)
         
         for i in range(len(self.y_train)):
@@ -151,7 +151,7 @@ class PredictionExperiment:
             next_token = self.y_train[i]
             transitions[prev_token][next_token] += 1
         
-        # 预测测试集
+        # Predict test set
         y_pred_markov = []
         fallback_token = Counter(self.y_train).most_common(1)[0][0]
         
@@ -159,11 +159,11 @@ class PredictionExperiment:
             prev_token = seq[-1]
             
             if prev_token in transitions and transitions[prev_token]:
-                # 选择最可能的下一个token
+                # Select the most likely next token
                 pred = transitions[prev_token].most_common(1)[0][0]
                 y_pred_markov.append(pred)
             else:
-                # 回退到最常见的token
+                # Fall back to most common token
                 y_pred_markov.append(fallback_token)
         
         accuracy = accuracy_score(self.y_test, y_pred_markov)
@@ -172,8 +172,8 @@ class PredictionExperiment:
             'transitions': len(transitions)
         }
         
-        print(f"学习到的转移模式数: {len(transitions)}")
-        print(f"Top-1 准确率: {accuracy:.3f}")
+        print(f"Learned transition patterns: {len(transitions)}")
+        print(f"Top-1 accuracy: {accuracy:.3f}")
         
         return accuracy
 
@@ -301,12 +301,12 @@ class PredictionExperiment:
             print(f"  {token}: {count}次 ({count/len(self.y_train):.1%})")
 
     def visualize_results(self):
-        """可视化实验结果"""
+        """Visualize experiment results"""
         if not self.results:
-            print("没有结果可以可视化")
+            print("No results to visualize")
             return
         
-        # 准备数据
+        # Prepare data
         models = []
         accuracies = []
         
@@ -314,56 +314,56 @@ class PredictionExperiment:
             models.append(model_name.upper())
             accuracies.append(metrics['accuracy'])
         
-        # 创建图表
+        # Create charts
         plt.figure(figsize=(12, 8))
         
-        # 准确率对比
+        # Chart A: Model accuracy comparison
         plt.subplot(2, 2, 1)
         bars = plt.bar(models, accuracies, color=['skyblue', 'lightcoral', 'lightgreen', 'gold'][:len(models)])
-        plt.title('模型准确率对比')
-        plt.ylabel('Top-1 准确率')
+        plt.title('(A) Model Accuracy Comparison')
+        plt.ylabel('Top-1 Accuracy')
         plt.xticks(rotation=45)
         
-        # 添加数值标签
+        # Add value labels
         for bar, acc in zip(bars, accuracies):
             plt.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01,
                     f'{acc:.3f}', ha='center', va='bottom')
         
-        # Token分布
+        # Chart B: Token distribution
         plt.subplot(2, 2, 2)
         token_dist = Counter([self.id_to_token[id] for id in self.y_train])
         top_tokens = dict(token_dist.most_common(10))
         plt.bar(range(len(top_tokens)), list(top_tokens.values()))
-        plt.title('Top-10 动作频率分布')
-        plt.ylabel('频次')
-        plt.xlabel('动作类型')
+        plt.title('(B) Top-10 Action Frequency Distribution')
+        plt.ylabel('Frequency')
+        plt.xlabel('Action Type')
         plt.xticks(range(len(top_tokens)), list(top_tokens.keys()), rotation=45)
         
-        # 序列长度分析
+        # Chart C: Dataset scale analysis
         plt.subplot(2, 2, 3)
-        sequence_lengths = [len(self.df)]  # 简化显示
-        plt.bar(['总序列长度'], sequence_lengths)
-        plt.title('数据集规模')
-        plt.ylabel('事件数量')
+        sequence_lengths = [len(self.df)]  # Simplified display
+        plt.bar(['Total Sequence Length'], sequence_lengths)
+        plt.title('(C) Dataset Scale')
+        plt.ylabel('Event Count')
         
-        # 模型性能详情
+        # Chart D: Model performance details
         plt.subplot(2, 2, 4)
         if 'lstm' in self.results and 'top3_accuracy' in self.results['lstm']:
             lstm_metrics = ['Top-1', 'Top-3']
             lstm_scores = [self.results['lstm']['accuracy'], self.results['lstm']['top3_accuracy']]
             plt.bar(lstm_metrics, lstm_scores, color='gold')
-            plt.title('LSTM模型详细性能')
-            plt.ylabel('准确率')
+            plt.title('(D) LSTM Model Detailed Performance')
+            plt.ylabel('Accuracy')
             for i, score in enumerate(lstm_scores):
                 plt.text(i, score + 0.01, f'{score:.3f}', ha='center', va='bottom')
         else:
-            plt.text(0.5, 0.5, '无LSTM结果', ha='center', va='center', transform=plt.gca().transAxes)
-            plt.title('LSTM模型性能')
+            plt.text(0.5, 0.5, 'No LSTM Results', ha='center', va='center', transform=plt.gca().transAxes)
+            plt.title('(D) LSTM Model Performance')
         
         plt.tight_layout()
         output_file = 'experiment_2_prediction_results.png'
         plt.savefig(output_file, dpi=300, bbox_inches='tight')
-        print(f"\n结果图表已保存至 {output_file}")
+        print(f"\nResults chart saved to {output_file}")
         plt.show()
 
     def generate_report(self):

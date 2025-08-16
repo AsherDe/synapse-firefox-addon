@@ -289,42 +289,42 @@ class UserStudyAnalyzer:
         """可视化用户行为模式"""
         fig, axes = plt.subplots(2, 2, figsize=(15, 12))
         
-        # 1. 动作类型分布
+        # Chart A: Action type distribution
         action_counts = self.df['action_subtype'].value_counts().head(10)
         axes[0, 0].bar(range(len(action_counts)), action_counts.values)
-        axes[0, 0].set_title(f'动作类型分布 ({self.user_group}组)')
+        axes[0, 0].set_title(f'(A) Action Type Distribution ({self.user_group} group)')
         axes[0, 0].set_xticks(range(len(action_counts)))
         axes[0, 0].set_xticklabels(action_counts.index, rotation=45)
-        axes[0, 0].set_ylabel('频次')
+        axes[0, 0].set_ylabel('Frequency')
         
-        # 2. 时间分布（按小时）
+        # Chart B: Hourly activity distribution
         self.df['hour'] = self.df['datetime'].dt.hour
         hourly_activity = self.df['hour'].value_counts().sort_index()
         axes[0, 1].plot(hourly_activity.index, hourly_activity.values, 'o-')
-        axes[0, 1].set_title('每小时活动分布')
-        axes[0, 1].set_xlabel('小时')
-        axes[0, 1].set_ylabel('事件数')
+        axes[0, 1].set_title('(B) Hourly Activity Distribution')
+        axes[0, 1].set_xlabel('Hour')
+        axes[0, 1].set_ylabel('Event Count')
         axes[0, 1].grid(True, alpha=0.3)
         
-        # 3. 事件间隔分布
+        # Chart C: Event interval distribution
         intervals = self.df['time_since_last'].dropna()
-        intervals = intervals[intervals < 60]  # 只显示60秒内的间隔
+        intervals = intervals[intervals < 60]  # Only show intervals within 60 seconds
         axes[1, 0].hist(intervals, bins=30, alpha=0.7)
-        axes[1, 0].set_title('事件间隔分布 (≤60秒)')
-        axes[1, 0].set_xlabel('间隔时间 (秒)')
-        axes[1, 0].set_ylabel('频次')
+        axes[1, 0].set_title('(C) Event Interval Distribution (≤60s)')
+        axes[1, 0].set_xlabel('Interval Time (seconds)')
+        axes[1, 0].set_ylabel('Frequency')
         
-        # 4. 会话活动时间线
+        # Chart D: Session activity timeline
         if 'session_id' in self.df.columns:
             session_lengths = self.df.groupby('session_id').size()
             axes[1, 1].bar(range(len(session_lengths)), session_lengths.values)
-            axes[1, 1].set_title('各会话事件数量')
-            axes[1, 1].set_xlabel('会话ID')
-            axes[1, 1].set_ylabel('事件数')
+            axes[1, 1].set_title('(D) Events per Session')
+            axes[1, 1].set_xlabel('Session ID')
+            axes[1, 1].set_ylabel('Event Count')
         else:
-            axes[1, 1].text(0.5, 0.5, '无会话数据', ha='center', va='center', 
+            axes[1, 1].text(0.5, 0.5, 'No Session Data', ha='center', va='center', 
                            transform=axes[1, 1].transAxes)
-            axes[1, 1].set_title('会话分析')
+            axes[1, 1].set_title('(D) Session Analysis')
         
         plt.tight_layout()
         output_file = f'experiment_3_user_behavior_{self.user_group}.png'

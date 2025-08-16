@@ -12,6 +12,7 @@ class PopupController {
     this.loadPrediction();
     this.loadModelInfo();
     this.loadPauseState();
+    this.loadGuidanceState();
     this.setupEventListeners();
     // No longer using periodic updates - using real-time connection instead
   }
@@ -148,6 +149,7 @@ class PopupController {
     const devModeBtn = document.getElementById('devModeBtn') as HTMLButtonElement;
     const closeDev = document.getElementById('closeDev') as HTMLButtonElement;
     const exportBtn = document.getElementById('exportDataBtn') as HTMLButtonElement;
+    const guidanceToggle = document.getElementById('guidanceToggle') as HTMLInputElement;
 
     clearBtn.addEventListener('click', () => {
       this.clearSequence();
@@ -167,6 +169,10 @@ class PopupController {
 
     exportBtn?.addEventListener('click', () => {
       this.exportAllData();
+    });
+
+    guidanceToggle?.addEventListener('change', (e) => {
+      this.toggleGuidance((e.target as HTMLInputElement).checked);
     });
 
     // Developer mode tab switching
@@ -234,6 +240,42 @@ class PopupController {
       }
       this.updatePauseUI(response?.isPaused || false);
     });
+  }
+
+  private loadGuidanceState(): void {
+    chrome.storage.local.get(['assistantEnabled'], (result) => {
+      const isEnabled = result.assistantEnabled !== false; // Default to true
+      this.updateGuidanceUI(isEnabled);
+    });
+  }
+
+  private toggleGuidance(enabled: boolean): void {
+    chrome.storage.local.set({ assistantEnabled: enabled }, () => {
+      console.log(`Smart guidance ${enabled ? 'enabled' : 'disabled'}`);
+      
+      // Notify content scripts about the change
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (tabs[0]?.id) {
+          chrome.tabs.sendMessage(tabs[0].id, {
+            type: 'guidanceToggled',
+            enabled: enabled
+          });
+        }
+      });
+      
+      // Notify background script
+      this.sendToBackground({
+        type: 'guidanceToggled',
+        enabled: enabled
+      });
+    });
+  }
+
+  private updateGuidanceUI(enabled: boolean): void {
+    const guidanceToggle = document.getElementById('guidanceToggle') as HTMLInputElement;
+    if (guidanceToggle) {
+      guidanceToggle.checked = enabled;
+    }
   }
 
   private togglePause(): void {

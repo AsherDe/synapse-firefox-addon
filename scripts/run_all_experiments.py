@@ -37,7 +37,7 @@ def run_command(cmd, description):
 def check_dependencies():
     """检查必需的Python包"""
     required_packages = [
-        'pandas', 'numpy', 'matplotlib', 'scipy', 'seaborn', 'scikit-learn'
+        'pandas', 'numpy', 'matplotlib', 'scipy', 'seaborn', 'sklearn'
     ]
     
     missing_packages = []
