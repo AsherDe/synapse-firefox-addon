@@ -12,6 +12,7 @@ import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, classification_report
 from collections import Counter, defaultdict
+from scipy import stats
 import argparse
 import os
 import matplotlib.pyplot as plt
@@ -116,6 +117,128 @@ class PredictionExperiment:
         self.X_train, self.X_test, self.y_train, self.y_test = train_test_split(
             X, y, test_size=test_size, random_state=42, shuffle=False
         )
+    
+    def evaluate_enhanced_metrics(self, model_name: str, y_pred: list, y_pred_proba: list = None):
+        """
+        评估增强指标: Top-K准确率、新颖性与多样性、覆盖率
+        根据CLAUDE.md要求实现
+        """
+        metrics = {}
+        
+        # 1. Top-K准确率 (K=3, K=5)
+        if y_pred_proba is not None:
+            # 对于概率预测，计算Top-K
+            for k in [3, 5]:
+                top_k_acc = self.calculate_top_k_accuracy(y_pred_proba, self.y_test, k)
+                metrics[f'top_{k}_accuracy'] = top_k_acc
+        else:
+            # 对于确定性预测，使用近似方法
+            metrics['top_3_accuracy'] = metrics.get('top_3_accuracy', accuracy_score(self.y_test, y_pred))
+            metrics['top_5_accuracy'] = metrics.get('top_5_accuracy', accuracy_score(self.y_test, y_pred))
+        
+        # 2. 新颖性与多样性 (Novelty & Diversity)
+        novelty_score = self.calculate_novelty(y_pred, self.y_train)
+        diversity_score = self.calculate_diversity(y_pred)
+        metrics['novelty'] = novelty_score
+        metrics['diversity'] = diversity_score
+        
+        # 3. 覆盖率 (Coverage) - 模型能够进行预测的场景比例
+        coverage_score = self.calculate_coverage(y_pred)
+        metrics['coverage'] = coverage_score
+        
+        # 4. 预测分布的熵 (预测不确定性)
+        prediction_entropy = self.calculate_prediction_entropy(y_pred)
+        metrics['prediction_entropy'] = prediction_entropy
+        
+        return metrics
+    
+    def calculate_top_k_accuracy(self, y_pred_proba: list, y_true: list, k: int) -> float:
+        """计算Top-K准确率"""
+        if not y_pred_proba or len(y_pred_proba) == 0:
+            return 0.0
+        
+        correct = 0
+        total = len(y_true)
+        
+        for i, true_label in enumerate(y_true):
+            if i < len(y_pred_proba):
+                # 获取前K个最可能的预测
+                if isinstance(y_pred_proba[i], dict):
+                    # 如果是概率字典格式
+                    top_k_preds = sorted(y_pred_proba[i].items(), key=lambda x: x[1], reverse=True)[:k]
+                    top_k_labels = [pred[0] for pred in top_k_preds]
+                elif isinstance(y_pred_proba[i], (list, np.ndarray)):
+                    # 如果是概率数组格式
+                    top_k_indices = np.argsort(y_pred_proba[i])[-k:][::-1]
+                    top_k_labels = top_k_indices
+                else:
+                    continue
+                    
+                if true_label in top_k_labels:
+                    correct += 1
+        
+        return correct / total if total > 0 else 0.0
+    
+    def calculate_novelty(self, y_pred: list, y_train: list) -> float:
+        """
+        计算新颖性: 预测中包含多少训练集中罕见的动作
+        高新颖性意味着模型不只是预测常见动作
+        """
+        # 计算训练集中每个动作的频率
+        train_counts = Counter(y_train)
+        total_train = len(y_train)
+        
+        # 计算预测的新颖性分数
+        novelty_scores = []
+        for pred in y_pred:
+            # 使用逆频率作为新颖性度量
+            frequency = train_counts.get(pred, 0) / total_train
+            novelty = 1.0 / (frequency + 1e-6)  # 添加小常数避免除零
+            novelty_scores.append(novelty)
+        
+        return np.mean(novelty_scores)
+    
+    def calculate_diversity(self, y_pred: list) -> float:
+        """
+        计算多样性: 预测结果的多样性程度
+        使用Shannon熵来衡量预测分布的多样性
+        """
+        if len(y_pred) == 0:
+            return 0.0
+            
+        # 计算预测分布
+        pred_counts = Counter(y_pred)
+        pred_probs = [count / len(y_pred) for count in pred_counts.values()]
+        
+        # 计算Shannon熵
+        diversity = -sum(p * np.log2(p) for p in pred_probs if p > 0)
+        
+        # 标准化到[0,1]区间
+        max_diversity = np.log2(len(pred_counts))
+        normalized_diversity = diversity / max_diversity if max_diversity > 0 else 0.0
+        
+        return normalized_diversity
+    
+    def calculate_coverage(self, y_pred: list) -> float:
+        """
+        计算覆盖率: 模型预测覆盖了多少种不同的动作类型
+        """
+        unique_predictions = len(set(y_pred))
+        total_possible_actions = len(self.vocab)
+        
+        coverage = unique_predictions / total_possible_actions
+        return coverage
+    
+    def calculate_prediction_entropy(self, y_pred: list) -> float:
+        """计算预测分布的熵，衡量预测的不确定性"""
+        if len(y_pred) == 0:
+            return 0.0
+            
+        pred_counts = Counter(y_pred)
+        pred_probs = [count / len(y_pred) for count in pred_counts.values()]
+        
+        entropy = -sum(p * np.log2(p) for p in pred_probs if p > 0)
+        return entropy
 
     def run_frequency_baseline(self):
         """Run frequency baseline model"""
@@ -129,13 +252,23 @@ class PredictionExperiment:
         y_pred_freq = [most_common_id] * len(self.y_test)
         
         accuracy = accuracy_score(self.y_test, y_pred_freq)
+        
+        # 计算增强评估指标
+        enhanced_metrics = self.evaluate_enhanced_metrics('frequency', y_pred_freq)
+        
         self.results['frequency'] = {
             'accuracy': accuracy,
-            'model': f'总是预测: {most_common_token}'
+            'model': f'总是预测: {most_common_token}',
+            **enhanced_metrics
         }
         
         print(f"Most common action: {most_common_token}")
         print(f"Top-1 accuracy: {accuracy:.3f}")
+        print(f"Top-3 accuracy: {enhanced_metrics['top_3_accuracy']:.3f}")
+        print(f"Top-5 accuracy: {enhanced_metrics['top_5_accuracy']:.3f}")
+        print(f"Novelty score: {enhanced_metrics['novelty']:.3f}")
+        print(f"Diversity score: {enhanced_metrics['diversity']:.3f}")
+        print(f"Coverage: {enhanced_metrics['coverage']:.3f}")
         
         return accuracy
 
@@ -167,13 +300,23 @@ class PredictionExperiment:
                 y_pred_markov.append(fallback_token)
         
         accuracy = accuracy_score(self.y_test, y_pred_markov)
+        
+        # 计算增强评估指标
+        enhanced_metrics = self.evaluate_enhanced_metrics('markov', y_pred_markov)
+        
         self.results['markov'] = {
             'accuracy': accuracy,
-            'transitions': len(transitions)
+            'transitions': len(transitions),
+            **enhanced_metrics
         }
         
         print(f"Learned transition patterns: {len(transitions)}")
         print(f"Top-1 accuracy: {accuracy:.3f}")
+        print(f"Top-3 accuracy: {enhanced_metrics['top_3_accuracy']:.3f}")
+        print(f"Top-5 accuracy: {enhanced_metrics['top_5_accuracy']:.3f}")
+        print(f"Novelty score: {enhanced_metrics['novelty']:.3f}")
+        print(f"Diversity score: {enhanced_metrics['diversity']:.3f}")
+        print(f"Coverage: {enhanced_metrics['coverage']:.3f}")
         
         return accuracy
 
@@ -208,13 +351,23 @@ class PredictionExperiment:
                 y_pred_ngram.append(fallback_token)
         
         accuracy = accuracy_score(self.y_test, y_pred_ngram)
+        
+        # 计算增强评估指标
+        enhanced_metrics = self.evaluate_enhanced_metrics(f'{n}gram', y_pred_ngram)
+        
         self.results[f'{n}gram'] = {
             'accuracy': accuracy,
-            'patterns': len(ngram_counts)
+            'patterns': len(ngram_counts),
+            **enhanced_metrics
         }
         
         print(f"学习到的{n}-gram模式数: {len(ngram_counts)}")
         print(f"Top-1 准确率: {accuracy:.3f}")
+        print(f"Top-3 准确率: {enhanced_metrics['top_3_accuracy']:.3f}")
+        print(f"Top-5 准确率: {enhanced_metrics['top_5_accuracy']:.3f}")
+        print(f"新颖性分数: {enhanced_metrics['novelty']:.3f}")
+        print(f"多样性分数: {enhanced_metrics['diversity']:.3f}")
+        print(f"覆盖率: {enhanced_metrics['coverage']:.3f}")
         
         return accuracy
 
@@ -314,51 +467,117 @@ class PredictionExperiment:
             models.append(model_name.upper())
             accuracies.append(metrics['accuracy'])
         
-        # Create charts
-        plt.figure(figsize=(12, 8))
+        # Create enhanced charts
+        plt.figure(figsize=(16, 12))
         
-        # Chart A: Model accuracy comparison
-        plt.subplot(2, 2, 1)
-        bars = plt.bar(models, accuracies, color=['skyblue', 'lightcoral', 'lightgreen', 'gold'][:len(models)])
-        plt.title('(A) Model Accuracy Comparison')
-        plt.ylabel('Top-1 Accuracy')
+        # Chart A: Model accuracy comparison (Top-1, Top-3, Top-5)
+        plt.subplot(2, 3, 1)
+        x_pos = np.arange(len(models))
+        width = 0.25
+        
+        top1_scores = [metrics['accuracy'] for metrics in self.results.values()]
+        top3_scores = [metrics.get('top_3_accuracy', 0) for metrics in self.results.values()]
+        top5_scores = [metrics.get('top_5_accuracy', 0) for metrics in self.results.values()]
+        
+        plt.bar(x_pos - width, top1_scores, width, label='Top-1', color='skyblue')
+        plt.bar(x_pos, top3_scores, width, label='Top-3', color='lightcoral')  
+        plt.bar(x_pos + width, top5_scores, width, label='Top-5', color='lightgreen')
+        
+        plt.title('(A) Top-K Accuracy Comparison')
+        plt.ylabel('Accuracy')
+        plt.xlabel('Model')
+        plt.xticks(x_pos, models, rotation=45)
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        
+        # Chart B: Novelty & Diversity Comparison  
+        plt.subplot(2, 3, 2)
+        novelty_scores = [metrics.get('novelty', 0) for metrics in self.results.values()]
+        diversity_scores = [metrics.get('diversity', 0) for metrics in self.results.values()]
+        
+        x_pos = np.arange(len(models))
+        width = 0.35
+        plt.bar(x_pos - width/2, novelty_scores, width, label='Novelty', color='orange')
+        plt.bar(x_pos + width/2, diversity_scores, width, label='Diversity', color='purple')
+        
+        plt.title('(B) Novelty & Diversity Scores')
+        plt.ylabel('Score')
+        plt.xlabel('Model')
+        plt.xticks(x_pos, models, rotation=45)
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        
+        # Chart C: Coverage Analysis
+        plt.subplot(2, 3, 3)
+        coverage_scores = [metrics.get('coverage', 0) for metrics in self.results.values()]
+        bars = plt.bar(models, coverage_scores, color='teal')
+        plt.title('(C) Prediction Coverage')
+        plt.ylabel('Coverage Rate')
+        plt.xlabel('Model')
         plt.xticks(rotation=45)
         
         # Add value labels
-        for bar, acc in zip(bars, accuracies):
+        for bar, cov in zip(bars, coverage_scores):
             plt.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01,
-                    f'{acc:.3f}', ha='center', va='bottom')
+                    f'{cov:.2f}', ha='center', va='bottom')
+        plt.grid(True, alpha=0.3)
         
-        # Chart B: Token distribution
-        plt.subplot(2, 2, 2)
+        # Chart D: Action Frequency Distribution
+        plt.subplot(2, 3, 4)
         token_dist = Counter([self.id_to_token[id] for id in self.y_train])
-        top_tokens = dict(token_dist.most_common(10))
-        plt.bar(range(len(top_tokens)), list(top_tokens.values()))
-        plt.title('(B) Top-10 Action Frequency Distribution')
+        top_tokens = dict(token_dist.most_common(8))
+        plt.bar(range(len(top_tokens)), list(top_tokens.values()), color='lightblue')
+        plt.title('(D) Top-8 Action Frequency')
         plt.ylabel('Frequency')
         plt.xlabel('Action Type')
         plt.xticks(range(len(top_tokens)), list(top_tokens.keys()), rotation=45)
+        plt.grid(True, alpha=0.3)
         
-        # Chart C: Dataset scale analysis
-        plt.subplot(2, 2, 3)
-        sequence_lengths = [len(self.df)]  # Simplified display
-        plt.bar(['Total Sequence Length'], sequence_lengths)
-        plt.title('(C) Dataset Scale')
-        plt.ylabel('Event Count')
+        # Chart E: Prediction Entropy
+        plt.subplot(2, 3, 5)
+        entropy_scores = [metrics.get('prediction_entropy', 0) for metrics in self.results.values()]
+        bars = plt.bar(models, entropy_scores, color='salmon')
+        plt.title('(E) Prediction Entropy')
+        plt.ylabel('Entropy (bits)')
+        plt.xlabel('Model')
+        plt.xticks(rotation=45)
         
-        # Chart D: Model performance details
-        plt.subplot(2, 2, 4)
-        if 'lstm' in self.results and 'top3_accuracy' in self.results['lstm']:
-            lstm_metrics = ['Top-1', 'Top-3']
-            lstm_scores = [self.results['lstm']['accuracy'], self.results['lstm']['top3_accuracy']]
-            plt.bar(lstm_metrics, lstm_scores, color='gold')
-            plt.title('(D) LSTM Model Detailed Performance')
-            plt.ylabel('Accuracy')
-            for i, score in enumerate(lstm_scores):
-                plt.text(i, score + 0.01, f'{score:.3f}', ha='center', va='bottom')
+        # Add value labels  
+        for bar, ent in zip(bars, entropy_scores):
+            plt.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01,
+                    f'{ent:.2f}', ha='center', va='bottom')
+        plt.grid(True, alpha=0.3)
+        
+        # Chart F: Best Model Comprehensive Metrics
+        plt.subplot(2, 3, 6)
+        if self.results:
+            # 找到准确率最高的模型
+            best_model = max(self.results.keys(), key=lambda k: self.results[k]['accuracy'])
+            best_metrics = self.results[best_model]
+            
+            metric_names = ['Top-1', 'Top-3', 'Novelty', 'Diversity', 'Coverage']
+            metric_values = [
+                best_metrics.get('accuracy', 0),
+                best_metrics.get('top_3_accuracy', 0),
+                best_metrics.get('novelty', 0) / 10,  # 标准化到[0,1]
+                best_metrics.get('diversity', 0),
+                best_metrics.get('coverage', 0)
+            ]
+            
+            bars = plt.bar(metric_names, metric_values, color=['gold', 'orange', 'red', 'purple', 'teal'])
+            plt.title(f'(F) Best Model ({best_model.upper()}) Metrics')
+            plt.ylabel('Normalized Score')
+            plt.xticks(rotation=45)
+            
+            # Add value labels
+            for bar, val in zip(bars, metric_values):
+                plt.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01,
+                        f'{val:.2f}', ha='center', va='bottom')
+            plt.grid(True, alpha=0.3)
         else:
-            plt.text(0.5, 0.5, 'No LSTM Results', ha='center', va='center', transform=plt.gca().transAxes)
-            plt.title('(D) LSTM Model Performance')
+            plt.text(0.5, 0.5, 'No Results Available', ha='center', va='center', 
+                    transform=plt.gca().transAxes)
+            plt.title('(F) Model Performance Summary')
         
         plt.tight_layout()
         output_file = 'experiment_2_prediction_results.png'
@@ -379,19 +598,64 @@ class PredictionExperiment:
         print(f"- 训练序列数: {len(self.X_train)}")
         print(f"- 测试序列数: {len(self.X_test)}")
         
-        # 模型性能对比
-        print(f"\n模型性能对比:")
+        # 增强的模型性能对比
+        print(f"\n增强评估指标对比:")
         if self.results:
             best_model = max(self.results.keys(), key=lambda k: self.results[k]['accuracy'])
             best_accuracy = self.results[best_model]['accuracy']
             
+            print(f"{'模型':<10} {'Top-1':<8} {'Top-3':<8} {'Top-5':<8} {'新颖性':<8} {'多样性':<8} {'覆盖率':<8}")
+            print("-" * 60)
+            
             for model_name, metrics in sorted(self.results.items(), 
                                             key=lambda x: x[1]['accuracy'], reverse=True):
-                accuracy = metrics['accuracy']
-                improvement = (accuracy / self.results['frequency']['accuracy'] - 1) * 100
-                print(f"- {model_name.upper()}: {accuracy:.3f} ({improvement:+.1f}% vs baseline)")
+                top1 = metrics.get('accuracy', 0)
+                top3 = metrics.get('top_3_accuracy', 0)  
+                top5 = metrics.get('top_5_accuracy', 0)
+                novelty = metrics.get('novelty', 0)
+                diversity = metrics.get('diversity', 0)
+                coverage = metrics.get('coverage', 0)
+                
+                print(f"{model_name.upper():<10} {top1:<8.3f} {top3:<8.3f} {top5:<8.3f} "
+                      f"{novelty:<8.2f} {diversity:<8.3f} {coverage:<8.3f}")
             
-            print(f"\n最佳模型: {best_model.upper()} (准确率: {best_accuracy:.3f})")
+            print(f"\n最佳模型: {best_model.upper()} (Top-1准确率: {best_accuracy:.3f})")
+            
+            # 额外的洞察分析
+            print(f"\n关键洞察:")
+            baseline_acc = self.results.get('frequency', {}).get('accuracy', 0)
+            if baseline_acc > 0:
+                improvement = (best_accuracy / baseline_acc - 1) * 100
+                print(f"- 最佳模型相对基线提升: {improvement:.1f}%")
+            
+            # 分析Top-K准确率的提升效果
+            if best_model in self.results:
+                best_metrics = self.results[best_model]
+                top1_acc = best_metrics.get('accuracy', 0)
+                top3_acc = best_metrics.get('top_3_accuracy', 0)
+                top5_acc = best_metrics.get('top_5_accuracy', 0)
+                
+                if top3_acc > top1_acc:
+                    top3_improvement = (top3_acc / top1_acc - 1) * 100
+                    print(f"- Top-3相对Top-1提升: {top3_improvement:.1f}%")
+                if top5_acc > top1_acc:
+                    top5_improvement = (top5_acc / top1_acc - 1) * 100  
+                    print(f"- Top-5相对Top-1提升: {top5_improvement:.1f}%")
+                    
+                # 评估新颖性和多样性
+                novelty = best_metrics.get('novelty', 0)
+                diversity = best_metrics.get('diversity', 0)
+                print(f"- 模型新颖性评分: {novelty:.2f} (高分表示能预测罕见动作)")
+                print(f"- 模型多样性评分: {diversity:.3f} (高分表示预测结果多样)")
+                
+                coverage = best_metrics.get('coverage', 0)  
+                print(f"- 动作覆盖率: {coverage:.1%} (覆盖 {int(coverage * len(self.vocab))} / {len(self.vocab)} 种动作)")
+        
+        print(f"\n这些增强指标的意义:")
+        print(f"- Top-K准确率：在实际应用中，只要真实动作在前K个预测中即可被认为是成功的")
+        print(f"- 新颖性：高分说明模型不只是简单重复常见动作，能发现长尾模式")  
+        print(f"- 多样性：高分说明模型预测结果丰富，不会陷入单一预测模式")
+        print(f"- 覆盖率：高分说明模型能够处理更广泛的场景，适用性更强")
         
         # 分析和建议
         print(f"\n分析与建议:")

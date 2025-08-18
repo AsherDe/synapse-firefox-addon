@@ -40,6 +40,230 @@ class UserStudyAnalyzer:
         # 识别会话边界（超过5分钟无活动认为是新会话）
         session_breaks = self.df['time_since_last'] > 300  # 5分钟
         self.df['session_id'] = session_breaks.cumsum()
+        
+        # 根据CLAUDE.md要求实现任务分割
+        self.segment_tasks()
+
+    def segment_tasks(self):
+        """
+        实现智能任务分割功能
+        根据CLAUDE.md要求：识别用户何时开始和结束一个任务
+        使用特定的URL、form_submit事件或长时间静默作为任务边界标志
+        """
+        print(f"开始任务分割分析...")
+        
+        # 初始化任务ID
+        self.df['task_id'] = -1
+        task_counter = 0
+        
+        # 1. 基于URL变化的任务边界识别
+        task_boundaries = set()
+        
+        # 检测页面导航作为任务开始标志
+        page_changes = self.df['url'].ne(self.df['url'].shift())
+        navigation_indices = self.df[page_changes].index.tolist()
+        task_boundaries.update(navigation_indices)
+        
+        # 2. 基于form_submit事件的任务边界
+        form_submit_events = self.df[self.df['event_type'] == 'user_action_form_submit']
+        if not form_submit_events.empty:
+            # form提交通常标志着一个任务的完成
+            form_submit_indices = form_submit_events.index.tolist()
+            task_boundaries.update(form_submit_indices)
+            print(f"发现 {len(form_submit_indices)} 个表单提交事件作为任务边界")
+        
+        # 3. 基于长时间静默的任务边界
+        # 超过30秒无活动认为是任务间的停顿
+        long_pauses = self.df[self.df['time_since_last'] > 30].index.tolist()
+        task_boundaries.update(long_pauses)
+        print(f"发现 {len(long_pauses)} 个长时间停顿作为任务边界")
+        
+        # 4. 基于特定URL模式的任务开始页面识别
+        task_start_urls = self.identify_task_start_pages()
+        task_start_indices = self.df[self.df['url'].isin(task_start_urls)].index.tolist()
+        task_boundaries.update(task_start_indices)
+        
+        # 5. 基于行为模式的任务边界（高级启发式）
+        behavioral_boundaries = self.detect_behavioral_task_boundaries()
+        task_boundaries.update(behavioral_boundaries)
+        
+        # 排序任务边界
+        sorted_boundaries = sorted(task_boundaries)
+        print(f"总共识别出 {len(sorted_boundaries)} 个潜在任务边界")
+        
+        # 分配任务ID
+        current_task_id = 0
+        last_boundary = 0
+        
+        for boundary in sorted_boundaries:
+            # 为上一个任务段分配ID
+            if boundary > last_boundary:
+                self.df.loc[last_boundary:boundary-1, 'task_id'] = current_task_id
+                current_task_id += 1
+            last_boundary = boundary
+        
+        # 处理最后一个任务段
+        if last_boundary < len(self.df):
+            self.df.loc[last_boundary:, 'task_id'] = current_task_id
+        
+        # 生成任务分割报告
+        self.generate_task_segmentation_report()
+        
+    def identify_task_start_pages(self) -> List[str]:
+        """识别可能的任务开始页面"""
+        task_start_patterns = [
+            'dashboard', 'home', 'main', 'index',  # 主页类型
+            'task', 'assignment', 'work',          # 明确的任务页面
+            'new', 'create', 'add',                # 创建新内容的页面
+            'login', 'signin', 'auth'              # 认证页面（新会话开始）
+        ]
+        
+        urls = self.df['url'].dropna().unique()
+        task_start_urls = []
+        
+        for url in urls:
+            url_lower = url.lower()
+            if any(pattern in url_lower for pattern in task_start_patterns):
+                task_start_urls.append(url)
+        
+        print(f"识别出 {len(task_start_urls)} 个任务开始页面")
+        return task_start_urls
+    
+    def detect_behavioral_task_boundaries(self) -> List[int]:
+        """基于行为模式检测任务边界"""
+        boundaries = []
+        
+        # 1. 检测"搜索-浏览-选择"模式的边界
+        search_events = self.df[self.df['action_subtype'] == 'text_input']
+        if not search_events.empty:
+            # 搜索后的第一次点击可能是新任务的开始
+            for idx in search_events.index:
+                # 寻找搜索后5秒内的第一次点击
+                following_events = self.df[
+                    (self.df.index > idx) & 
+                    (self.df['datetime'] <= search_events.loc[idx, 'datetime'] + timedelta(seconds=5))
+                ]
+                click_events = following_events[following_events['action_subtype'] == 'click']
+                if not click_events.empty:
+                    boundaries.append(click_events.index[0])
+        
+        # 2. 检测"复制-粘贴"操作序列的边界
+        copy_events = self.df[self.df['event_type'] == 'user_action_clipboard']
+        if not copy_events.empty:
+            # 复制操作可能标志着信息收集任务的结束和新任务的开始
+            boundaries.extend(copy_events.index.tolist())
+        
+        # 3. 检测页面内导航模式
+        click_events = self.df[self.df['action_subtype'] == 'click']
+        if len(click_events) > 1:
+            # 连续快速点击后的停顿可能表示任务边界
+            click_intervals = click_events['datetime'].diff().dt.total_seconds()
+            rapid_clicking = click_intervals < 2  # 2秒内的连续点击
+            
+            # 寻找快速点击序列的结束点
+            for i, is_rapid in enumerate(rapid_clicking):
+                if i > 0 and not is_rapid and rapid_clicking.iloc[i-1]:
+                    boundaries.append(click_events.index[i])
+        
+        print(f"基于行为模式检测到 {len(set(boundaries))} 个任务边界")
+        return list(set(boundaries))
+    
+    def generate_task_segmentation_report(self):
+        """生成任务分割报告"""
+        if 'task_id' not in self.df.columns:
+            print("任务分割未完成，跳过报告生成")
+            return
+            
+        print(f"\n=== 任务分割报告 ===")
+        
+        valid_tasks = self.df[self.df['task_id'] >= 0]
+        unique_tasks = valid_tasks['task_id'].nunique()
+        
+        print(f"总共识别出 {unique_tasks} 个任务")
+        
+        if unique_tasks == 0:
+            print("未识别出有效任务")
+            return
+        
+        # 计算每个任务的统计信息
+        task_stats = []
+        for task_id in sorted(valid_tasks['task_id'].unique()):
+            task_data = valid_tasks[valid_tasks['task_id'] == task_id]
+            
+            if len(task_data) == 0:
+                continue
+                
+            task_start = task_data['datetime'].min()
+            task_end = task_data['datetime'].max()
+            duration = (task_end - task_start).total_seconds()
+            
+            # 计算任务特征
+            event_count = len(task_data)
+            click_count = len(task_data[task_data['action_subtype'] == 'click'])
+            input_count = len(task_data[task_data['action_subtype'] == 'text_input'])
+            unique_urls = task_data['url'].nunique()
+            
+            # 判断任务类型（启发式）
+            task_type = self.classify_task_type(task_data)
+            
+            task_stats.append({
+                'task_id': task_id,
+                'start_time': task_start,
+                'end_time': task_end,
+                'duration': duration,
+                'event_count': event_count,
+                'click_count': click_count,
+                'input_count': input_count,
+                'unique_urls': unique_urls,
+                'task_type': task_type
+            })
+        
+        # 创建DataFrame并显示统计
+        task_df = pd.DataFrame(task_stats)
+        
+        print(f"\n任务统计摘要:")
+        print(f"- 平均任务持续时间: {task_df['duration'].mean():.1f} 秒")
+        print(f"- 平均每任务事件数: {task_df['event_count'].mean():.1f}")
+        print(f"- 平均每任务点击数: {task_df['click_count'].mean():.1f}")
+        print(f"- 平均每任务输入次数: {task_df['input_count'].mean():.1f}")
+        
+        # 按任务类型分组统计
+        if 'task_type' in task_df.columns:
+            type_stats = task_df.groupby('task_type').agg({
+                'duration': ['count', 'mean'],
+                'click_count': 'mean',
+                'event_count': 'mean'
+            }).round(2)
+            
+            print(f"\n按任务类型分组:")
+            print(type_stats)
+        
+        # 保存详细的任务分割数据
+        self.task_segments = task_df
+        
+        return task_df
+    
+    def classify_task_type(self, task_data: pd.DataFrame) -> str:
+        """基于任务数据的特征对任务进行分类"""
+        # 简单的启发式任务分类
+        click_count = len(task_data[task_data['action_subtype'] == 'click'])
+        input_count = len(task_data[task_data['action_subtype'] == 'text_input'])
+        form_submit_count = len(task_data[task_data['event_type'] == 'user_action_form_submit'])
+        unique_urls = task_data['url'].nunique()
+        
+        # 分类逻辑
+        if form_submit_count > 0:
+            return 'form_submission'
+        elif input_count > click_count:
+            return 'data_entry'
+        elif unique_urls > 3:
+            return 'browsing_navigation'
+        elif click_count > 5 and input_count == 0:
+            return 'pure_navigation'
+        elif input_count > 0 and click_count > 0:
+            return 'search_and_select'
+        else:
+            return 'general_interaction'
 
     def analyze_task_efficiency(self):
         """分析任务效率指标"""

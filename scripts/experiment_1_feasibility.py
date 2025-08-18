@@ -12,37 +12,123 @@ from scipy.fftpack import dct, idct
 import matplotlib.pyplot as plt
 import argparse
 import os
+import json
 
 class FeasibilityAnalyzer:
     def __init__(self, cleaned_data_file: str):
         self.df = pd.read_csv(cleaned_data_file)
-        # 模拟鼠标轨迹数据（在真实数据收集中，应记录轨迹点）
-        self.mouse_trails = self._simulate_mouse_trails()
+        # 使用真实鼠标轨迹数据from user_action_mouse_pattern事件
+        self.mouse_trails = self._extract_real_mouse_trails()
 
-    def _simulate_mouse_trails(self) -> list:
-        """为演示目的，根据点击事件模拟一些鼠标轨迹"""
+    def _extract_real_mouse_trails(self) -> list:
+        """从user_action_mouse_pattern事件中提取真实的鼠标轨迹数据"""
         trails = []
-        click_events = self.df[self.df['event_type'] == 'user_action_click'].dropna(subset=['x_coord', 'y_coord'])
         
-        if click_events.empty:
-            print("警告：没有找到包含坐标信息的点击事件。生成模拟数据进行演示...")
-            # 生成一些模拟轨迹数据
-            for i in range(5):
-                trail_len = 50
-                x_trail = np.cumsum(np.random.randn(trail_len) * 10) + 960  # 屏幕中心附近
-                y_trail = np.cumsum(np.random.randn(trail_len) * 10) + 540
-                trails.append(np.vstack([x_trail, y_trail]).T)
-            return trails
+        # 查找包含鼠标轨迹的事件
+        mouse_pattern_events = self.df[self.df['event_type'] == 'user_action_mouse_pattern']
+        
+        if mouse_pattern_events.empty:
+            print("警告：没有找到user_action_mouse_pattern事件。尝试从JSON数据中解析...")
+            # 尝试从JSON格式的payload中提取trail数据
+            return self._parse_trails_from_json()
+        
+        print(f"找到 {len(mouse_pattern_events)} 个鼠标模式事件")
+        
+        # 从payload中提取trail数据
+        for _, row in mouse_pattern_events.iterrows():
+            try:
+                # 尝试解析trail数据 (假设存储在某个列中)
+                if 'trail' in row and pd.notna(row['trail']):
+                    # 如果trail数据是字符串格式，尝试解析
+                    trail_data = json.loads(row['trail']) if isinstance(row['trail'], str) else row['trail']
+                    
+                    if isinstance(trail_data, list) and len(trail_data) > 0:
+                        # 转换为numpy数组格式 [[x1,y1], [x2,y2], ...]
+                        trail_points = []
+                        for point in trail_data:
+                            if isinstance(point, dict) and 'x' in point and 'y' in point:
+                                trail_points.append([point['x'], point['y']])
+                        
+                        if len(trail_points) >= 3:  # 至少需要3个点构成轨迹
+                            trails.append(np.array(trail_points))
+                            
+            except (json.JSONDecodeError, ValueError, KeyError) as e:
+                print(f"解析轨迹数据时出错: {e}")
+                continue
+        
+        # 如果没有找到真实轨迹数据，则fallback到模拟数据但给出明确警告
+        if not trails:
+            print("警告：无法从数据中提取真实鼠标轨迹。")
+            print("请确保数据收集时正确记录了user_action_mouse_pattern事件的trail字段。")
+            print("当前将使用少量模拟数据进行演示，但这会降低分析的说服力。")
+            return self._fallback_to_simulated_data()
+        
+        print(f"成功提取了 {len(trails)} 条真实鼠标轨迹")
+        return trails
+    
+    def _parse_trails_from_json(self) -> list:
+        """尝试从JSON格式的数据文件中解析轨迹"""
+        trails = []
+        
+        # 检查是否有对应的JSON调试数据文件
+        json_files = [f for f in os.listdir('.') if f.startswith('synapse-debug-data') and f.endswith('.json')]
+        
+        if json_files:
+            for json_file in json_files:
+                try:
+                    with open(json_file, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                        
+                    # 查找鼠标轨迹事件
+                    if isinstance(data, list):
+                        for event in data:
+                            if (isinstance(event, dict) and 
+                                event.get('type') == 'user_action_mouse_pattern' and
+                                'payload' in event and
+                                'trail' in event['payload']):
+                                
+                                trail_data = event['payload']['trail']
+                                if isinstance(trail_data, list) and len(trail_data) >= 3:
+                                    trail_points = [[p['x'], p['y']] for p in trail_data 
+                                                  if isinstance(p, dict) and 'x' in p and 'y' in p]
+                                    if trail_points:
+                                        trails.append(np.array(trail_points))
+                                        
+                    print(f"从 {json_file} 中提取了 {len(trails)} 条轨迹")
+                    
+                except (json.JSONDecodeError, FileNotFoundError, KeyError) as e:
+                    print(f"解析JSON文件 {json_file} 时出错: {e}")
+                    continue
+        
+        return trails
+    
+    def _fallback_to_simulated_data(self) -> list:
+        """作为fallback的模拟数据生成"""
+        trails = []
+        print("生成少量高质量模拟数据用于技术演示...")
+        
+        # 生成更真实的轨迹模式
+        for _ in range(3):  # 减少数量，强调这是演示用途
+            trail_len = np.random.randint(20, 60)  # 变化的轨迹长度
             
-        for _, row in click_events.iterrows():
-            # 模拟一个从屏幕随机位置到目标点的轨迹
-            start_x, start_y = np.random.rand(2) * np.array([1920, 1080])
-            end_x, end_y = row['x_coord'], row['y_coord']
+            # 模拟更真实的鼠标移动模式
+            t = np.linspace(0, 1, trail_len)
             
-            trail_len = 50 # 50个采样点
-            x_trail = np.linspace(start_x, end_x, trail_len) + np.random.randn(trail_len) * 10
-            y_trail = np.linspace(start_y, end_y, trail_len) + np.random.randn(trail_len) * 10
+            # 使用贝塞尔曲线风格的轨迹
+            start_x, start_y = np.random.rand(2) * np.array([1200, 800]) + 100
+            end_x, end_y = np.random.rand(2) * np.array([1200, 800]) + 100
+            ctrl_x, ctrl_y = (start_x + end_x)/2 + np.random.randn(2) * 200
+            
+            # 二次贝塞尔曲线
+            x_trail = (1-t)**2 * start_x + 2*(1-t)*t * ctrl_x + t**2 * end_x
+            y_trail = (1-t)**2 * start_y + 2*(1-t)*t * ctrl_y + t**2 * end_y
+            
+            # 添加自然的抖动
+            x_trail += np.random.randn(trail_len) * 3
+            y_trail += np.random.randn(trail_len) * 3
+            
             trails.append(np.vstack([x_trail, y_trail]).T)
+            
         return trails
 
     def analyze_dct_energy(self, n_coeffs_to_keep: int = 10):
@@ -269,7 +355,7 @@ class FeasibilityAnalyzer:
         ax2.set_ylabel('Energy Retention Rate', color='red')
         ax2.tick_params(axis='y', labelcolor='red')
         
-        plt.title(f'(G) Multi-trajectory Performance Analysis (n={n_trails})')
+        plt.title(f'(F) Multi-trajectory Performance Analysis (n={n_trails})')
         plt.xlabel('Number of Coefficients Retained')
         plt.ylabel('Reconstruction Error (RMSE)', color='blue')
         plt.grid(True, alpha=0.3)

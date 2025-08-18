@@ -1,4 +1,5 @@
 /// <reference path="./types.ts" />
+import { URLGeneralizationEngine, URLGeneralizationFeatures } from './url-generalization';
 
 /**
  * Optimized function to generate a stable CSS selector for a given element.
@@ -80,9 +81,13 @@ function getCssSelector(el: HTMLElement): string {
   return selectorParts.length > 0 ? selectorParts.join(' > ') : 'unknown';
 }
 
+// Initialize the URL generalization engine
+const urlGeneralizationEngine = new URLGeneralizationEngine();
+
 /**
  * Extract generalized features from DOM elements
  * Implements Strategy 1: Feature-based rather than instance-based tokens
+ * Now uses advanced URL generalization for enhanced privacy and accuracy
  */
 function extractElementFeatures(element: HTMLElement, url: string): GeneralizedEventFeatures {
   const features: GeneralizedEventFeatures = {};
@@ -141,54 +146,43 @@ function extractElementFeatures(element: HTMLElement, url: string): GeneralizedE
   // Determine if this is an input field
   features.is_input_field = ['input', 'textarea', 'select'].includes(element.tagName.toLowerCase());
   
-  // Extract page information
-  const urlObj = new URL(url);
-  features.domain = urlObj.hostname;
-  features.path_depth = urlObj.pathname.split('/').filter(p => p.length > 0).length;
+  // PRIVACY: Check if this is a password field
+  if (element.tagName.toLowerCase() === 'input') {
+    const inputElement = element as HTMLInputElement;
+    features.is_password_field = inputElement.type === 'password' || 
+                                 inputElement.autocomplete?.includes('password') ||
+                                 inputElement.name?.toLowerCase().includes('password') ||
+                                 inputElement.placeholder?.toLowerCase().includes('password');
+  } else {
+    features.is_password_field = false;
+  }
   
-  // Heuristic page type inference
-  features.page_type = inferPageType(url, element);
+  // Use advanced URL generalization for enhanced feature extraction
+  const urlFeatures = urlGeneralizationEngine.generalizeURL(url, element);
+  
+  // Map all URL generalization features to GeneralizedEventFeatures
+  features.domain = urlFeatures.domain;
+  features.domain_hash = urlFeatures.domain_hash;
+  features.path_depth = urlFeatures.path_depth;
+  features.page_type = urlFeatures.page_type;
+  features.page_type_confidence = urlFeatures.page_type_confidence;
+  features.path_component_types = urlFeatures.path_component_types;
+  features.path_keywords = urlFeatures.path_keywords;
+  features.query_param_count = urlFeatures.query_param_count;
+  features.query_param_keys = urlFeatures.query_param_keys;
+  features.query_param_key_hash = urlFeatures.query_param_key_hash;
+  features.has_fragment = urlFeatures.has_fragment;
   
   return features;
 }
 
 /**
  * Infer page type using heuristics
+ * This function is kept for backward compatibility and now delegates to the advanced URL generalization engine
  */
 function inferPageType(url: string, element?: HTMLElement): string {
-  const urlLower = url.toLowerCase();
-  const pathname = new URL(url).pathname.toLowerCase();
-  
-  // GitHub-specific patterns
-  if (url.includes('github.com')) {
-    if (pathname.includes('/issues')) return 'issue_tracker';
-    if (pathname.includes('/pull')) return 'pull_request';
-    if (pathname.includes('/blob') || pathname.includes('/tree')) return 'code_browser';
-    return 'code_repository';
-  }
-  
-  // General patterns
-  if (urlLower.includes('login') || urlLower.includes('signin') || urlLower.includes('auth')) {
-    return 'authentication';
-  }
-  if (urlLower.includes('search') || urlLower.includes('query')) {
-    return 'search_results';
-  }
-  if (urlLower.includes('settings') || urlLower.includes('preferences') || urlLower.includes('config')) {
-    return 'settings';
-  }
-  if (urlLower.includes('profile') || urlLower.includes('user') || urlLower.includes('account')) {
-    return 'user_profile';
-  }
-  if (urlLower.includes('admin') || urlLower.includes('dashboard')) {
-    return 'dashboard';
-  }
-  if (pathname.includes('/edit') || (element && (element.tagName.toLowerCase() === 'textarea' || 
-      (element.tagName.toLowerCase() === 'input' && (element as HTMLInputElement).type === 'text')))) {
-    return 'editor';
-  }
-  
-  return 'general';
+  const urlFeatures = urlGeneralizationEngine.generalizeURL(url, element);
+  return urlFeatures.page_type;
 }
 
 /**
@@ -339,14 +333,27 @@ class TextInputAggregator {
     }
 
     const features = extractElementFeatures(this.activeInput, window.location.href);
+    
+    // PRIVACY: Skip recording any input from password fields
+    if (features.is_password_field) {
+      console.log('[Synapse] Skipping password field input for privacy');
+      this.cleanup();
+      return;
+    }
+    
     const duration = Date.now() - this.inputStartTime;
     
+    // PRIVACY: Only record metadata, never actual text content
+    const textLength = this.inputBuffer.trim().length;
     const textInputPayload: UserActionTextInputPayload = {
-      text: this.inputBuffer.trim(),
+      text: '', // Never record actual text content for privacy
       selector: getCssSelector(this.activeInput),
       url: window.location.href,
       input_method: this.detectInputMethod(),
-      features: features,
+      features: {
+        ...features,
+        text_length: textLength // Only record length, not content
+      },
       duration: duration
     };
 
@@ -358,7 +365,7 @@ class TextInputAggregator {
     chrome.runtime.sendMessage(message);
     
     console.log('[Synapse] Text input finalized:', {
-      text: this.inputBuffer.trim(),
+      textLength: this.inputBuffer.trim().length, // Only log length, not content
       trigger,
       duration,
       method: this.detectInputMethod()
@@ -597,8 +604,8 @@ function setupMouseMoveMonitoring(): void {
       if (mouseTrail.length >= 3) {
         const pattern = analyzeMousePattern(mouseTrail);
         
-        // Only send meaningful mouse patterns
-        if (pattern.significance > 0.5) {
+        // Only send meaningful mouse patterns (降低门槛以收集更多数据用于研究)
+        if (pattern.significance > 0.1) {
           const features = {
             pattern_type: pattern.type,
             movement_speed: pattern.speed,
@@ -623,7 +630,7 @@ function setupMouseMoveMonitoring(): void {
           mouseTrail = []; // Reset trail after sending
         }
       }
-    }, 200); // Debounce mouse movement analysis
+    }, 100); // Debounce mouse movement analysis - 降低延迟以收集更多轨迹
   }, { passive: true });
 }
 
@@ -666,8 +673,12 @@ function analyzeMousePattern(trail: {x: number, y: number, timestamp: number}[])
     patternType = 'fast';
   }
   
-  // Calculate significance (how noteworthy this pattern is)
-  const significance = Math.min(1, (totalDistance / 100) * (directionChanges / 3) * Math.min(speed, 1));
+  // Calculate significance (how noteworthy this pattern is) - 调整公式以更容易收集数据
+  const significance = Math.min(1, 
+    (totalDistance / 50) * 0.5 + // 距离因子，降低门槛
+    (directionChanges / 2) * 0.3 + // 方向变化因子
+    Math.min(speed * 2, 1) * 0.2 // 速度因子
+  );
   
   return {
     type: patternType,

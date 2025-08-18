@@ -1,6 +1,6 @@
 {
   "name": "synapse",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Browser extension for FAST Token processing with ML-based user behavior prediction",
   "author": "Synapse Project Contributors",
   "license": "Apache-2.0",

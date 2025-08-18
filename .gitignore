@@ -51,3 +51,22 @@ coverage/
 # Temporary folders
 tmp/
 temp/
+
+# Data files (ignore all except .py and .md in scripts folder)
+scripts/*.csv
+scripts/*.json
+scripts/*.png
+scripts/*.jpg
+scripts/*.jpeg
+scripts/*.gif
+scripts/*.svg
+scripts/*.pkl
+scripts/*.pickle
+scripts/*.npy
+scripts/*.npz
+scripts/*.h5
+scripts/*.hdf5
+scripts/*.txt
+scripts/*.xlsx
+scripts/*.xls
+scripts/*.parquet

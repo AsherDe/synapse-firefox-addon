@@ -256,9 +256,21 @@ interface GeneralizedEventFeatures {
   element_text?: string;    // 按钮或元素文本(归一化)
   is_nav_link?: boolean;    // 是否为导航链接
   is_input_field?: boolean; // 是否为输入字段
+  is_password_field?: boolean; // 是否为密码字段 (PRIVACY)
   domain?: string;          // 页面域名
   path_depth?: number;      // URL路径深度
   page_type?: string;       // 页面类型(启发式判断)
+  text_length?: number;     // 文本长度 (仅元数据，不记录内容)
+  
+  // Enhanced URL generalization features (based on CLAUDE.md specifications)
+  domain_hash?: number;              // 域名哈希 (隐私保护)
+  page_type_confidence?: number;     // 页面类型识别置信度
+  path_component_types?: string[];   // 路径组件类型分析
+  path_keywords?: string[];          // 路径中的关键词
+  query_param_count?: number;        // 查询参数数量
+  query_param_keys?: string[];       // 查询参数键列表 (不包含值)
+  query_param_key_hash?: number;     // 查询参数键哈希
+  has_fragment?: boolean;            // 是否包含片段标识符
 }
 
 // 扩展的点击事件载荷
