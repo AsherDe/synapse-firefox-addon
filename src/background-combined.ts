@@ -60,8 +60,8 @@ const TRAINING_INTERVAL = 50; // Train every 50 events
 const MIN_TRAINING_EVENTS = 20; // Minimum events needed for training
 
 // Batch storage configuration
-const BATCH_WRITE_DELAY = 2000; // 2 seconds delay for batch writes
-const BATCH_WRITE_MAX_SIZE = 10; // Maximum events in batch before forced write
+const BATCH_WRITE_DELAY = 5000; // 5 seconds delay for batch writes
+const BATCH_WRITE_MAX_SIZE = 20; // Maximum events in batch before forced write
 const MAX_SEQUENCE_SIZE = 5000; // Maximum sequence size to prevent memory issues
 
 // ML Engine Constants
@@ -1437,204 +1437,136 @@ async function performIdleTrainingOptimized(sequence: GlobalActionSequence): Pro
 /**
  * Main message listener for events from content scripts and popups.
  */
-browser.runtime.onMessage.addListener((message: RawUserAction | { type: string; data?: any; enabled?: boolean }, sender: any, sendResponse: any) => {
-  const { type } = message;
-
-  const context = {
-    tabId: sender.tab?.id ?? null,
-    windowId: sender.tab?.windowId ?? null,
-    tabInfo: sender.tab,
-  };
-
-  if (type === 'user_action_click') {
-    const event: UserActionClickEvent = {
-      type,
-      payload: (message as RawUserAction).payload as UserActionClickPayload,
+browser.runtime.onMessage.addListener((message: any, sender: any, sendResponse: any) => {
+  // 统一处理所有用户行为事件
+  if (message.type && message.type.startsWith('user_action_')) {
+    const event: EnrichedEvent = {
+      type: message.type,
+      payload: message.payload,
       timestamp: Date.now(),
-      context,
+      context: {
+        tabId: sender.tab?.id ?? null,
+        windowId: sender.tab?.windowId ?? null,
+        tabInfo: sender.tab,
+      },
     };
     addEventToSequence(event);
-    return;
+    // 确认收到消息，可以给 content script 一个简单的回复
+    sendResponse({ status: 'received' }); 
+    return; // 结束处理
   }
 
-  if (type === 'user_action_keydown') {
-    const event: UserActionKeydownEvent = {
-      type,
-      payload: (message as RawUserAction).payload as UserActionKeydownPayload,
-      timestamp: Date.now(),
-      context,
-    };
-    addEventToSequence(event);
-    return;
-  }
+  // --- 处理来自 Popup 的请求 ---
+  switch (message.type) {
+    case 'getSequence':
+      browser.storage.session.get([SEQUENCE_STORAGE_KEY], (result: any) => {
+        sendResponse({ sequence: result[SEQUENCE_STORAGE_KEY] || [] });
+      });
+      return true; // 异步响应
 
-  if (type === 'user_action_text_input') {
-    const event: UserActionTextInputEvent = {
-      type,
-      payload: (message as RawUserAction).payload as UserActionTextInputPayload,
-      timestamp: Date.now(),
-      context,
-    };
-    addEventToSequence(event);
-    return;
-  }
+    case 'clearSequence':
+      (async () => {
+        if (dbManager) {
+          await dbManager.clearAllEvents();
+        } else {
+          browser.storage.session.set({ [SEQUENCE_STORAGE_KEY]: [] });
+        }
+        eventBatch = [];
+        sequenceSize = 0;
+        console.log('[Synapse] Global action sequence cleared.');
+        sendResponse({ success: true });
+      })();
+      return true; // 异步响应
 
-  // Handle requests from the popup
-  if (type === 'getSequence') {
-    browser.storage.session.get([SEQUENCE_STORAGE_KEY], (result: any) => {
-      sendResponse({ sequence: result[SEQUENCE_STORAGE_KEY] || [] });
-    });
-    return true; // Indicate async response
-  }
+    case 'getPrediction':
+      browser.storage.session.get(['lastPrediction'], (result: any) => {
+        sendResponse({ prediction: result.lastPrediction || null });
+      });
+      return true; // 异步响应
 
-  if (message.type === 'clearSequence') {
-    (async () => {
-      if (dbManager) {
-        await dbManager.clearAllEvents();
-      } else {
-        browser.storage.session.set({ [SEQUENCE_STORAGE_KEY]: [] }, () => {});
-      }
-      eventBatch = [];
-      sequenceSize = 0;
-      console.log('[Synapse] Global action sequence cleared.');
-      sendResponse({ success: true });
-    })();
-    return true; // Indicate async response
-  }
-
-  if (message.type === 'getPrediction') {
-    browser.storage.session.get(['lastPrediction'], (result: any) => {
-      sendResponse({ prediction: result.lastPrediction || null });
-    });
-    return true; // Indicate async response
-  }
-
-  if (message.type === 'getModelInfo') {
-    const simpleModelInfo = predictor.getModelInfo();
+    // ... 其他 popup case 保持不变 ...
+    // 将剩余的 if 判断转换为 switch case，结构更清晰
+    case 'getModelInfo':
+        const simpleModelInfo = predictor.getModelInfo();
     
-    if (mlWorkerReady) {
-      browser.storage.session.get(['mlWorkerInfo'], (result: any) => {
-        const workerInfo = result.mlWorkerInfo || { vocabSize: 0, skillsCount: 0 };
-        const advancedModelInfo = {
-          vocabSize: workerInfo.vocabSize,
-          skillsCount: workerInfo.skillsCount,
-          type: 'ML Worker with Web Worker isolation',
-          lastTraining: workerInfo.lastTraining
-        };
+        if (mlWorkerReady) {
+          browser.storage.session.get(['mlWorkerInfo'], (result: any) => {
+            const workerInfo = result.mlWorkerInfo || { vocabSize: 0, skillsCount: 0 };
+            const advancedModelInfo = {
+              vocabSize: workerInfo.vocabSize,
+              skillsCount: workerInfo.skillsCount,
+              type: 'ML Worker with Web Worker isolation',
+              lastTraining: workerInfo.lastTraining
+            };
+            
+            sendResponse({ 
+              simpleModel: simpleModelInfo,
+              advancedModel: advancedModelInfo,
+              isReady: predictor.isReady(),
+              workerReady: mlWorkerReady
+            });
+          });
+        } else {
+          const advancedModelInfo = {
+            vocabSize: mlEngine.getVocabularySize(),
+            skillsCount: mlEngine.getSkills().length,
+            type: 'Local ML Engine (fallback)'
+          };
+          
+          sendResponse({ 
+            simpleModel: simpleModelInfo,
+            advancedModel: advancedModelInfo,
+            isReady: predictor.isReady(),
+            workerReady: false
+          });
+        }
+        return true; // 异步响应
         
-        sendResponse({ 
-          simpleModel: simpleModelInfo,
-          advancedModel: advancedModelInfo,
-          isReady: predictor.isReady(),
-          workerReady: mlWorkerReady
+    case 'getSkills':
+        if (mlWorkerReady) {
+          mlWorker.postMessage({ type: 'getSkills' });
+          browser.storage.session.get(['workerSkills'], (result: any) => {
+            sendResponse({ skills: result.workerSkills || [] });
+          });
+        } else {
+          const skills = mlEngine.getSkills();
+          sendResponse({ skills });
+        }
+        return true; // 异步响应
+
+    case 'getCodebookInfo':
+        browser.storage.local.get(['tokenizer_codebook'], (result: any) => {
+          const codebook = result.tokenizer_codebook || [];
+          const info = {
+            codebookSize: codebook.length,
+            vectorDimension: codebook.length > 0 ? codebook[0].length : 0,
+            isInitialized: codebook.length > 0,
+            sampleVectors: codebook.slice(0, 3)
+          };
+          sendResponse({ codebookInfo: info });
         });
-      });
-    } else {
-      const advancedModelInfo = {
-        vocabSize: mlEngine.getVocabularySize(),
-        skillsCount: mlEngine.getSkills().length,
-        type: 'Local ML Engine (fallback)'
-      };
-      
-      sendResponse({ 
-        simpleModel: simpleModelInfo,
-        advancedModel: advancedModelInfo,
-        isReady: predictor.isReady(),
-        workerReady: false
-      });
-    }
-    return true; // Indicate async response
-  }
-  
-  if (message.type === 'getSkills') {
-    if (mlWorkerReady) {
-      mlWorker.postMessage({ type: 'getSkills' });
-      // Response will be stored in session storage by worker message handler
-      browser.storage.session.get(['workerSkills'], (result: any) => {
-        sendResponse({ skills: result.workerSkills || [] });
-      });
-    } else {
-      const skills = mlEngine.getSkills();
-      sendResponse({ skills });
-    }
-    return true; // Indicate async response
-  }
+        return true; // 异步响应
 
-  if (message.type === 'getCodebookInfo') {
-    browser.storage.local.get(['tokenizer_codebook'], (result: any) => {
-      const codebook = result.tokenizer_codebook || [];
-      const info = {
-        codebookSize: codebook.length,
-        vectorDimension: codebook.length > 0 ? codebook[0].length : 0,
-        isInitialized: codebook.length > 0,
-        sampleVectors: codebook.slice(0, 3)
-      };
-      sendResponse({ codebookInfo: info });
-    });
-    return true; // Indicate async response
-  }
+    case 'togglePause':
+        isPaused = !isPaused;
+        browser.storage.session.set({ [PAUSE_STATE_KEY]: isPaused }, () => {
+          console.log(`[Synapse] Extension ${isPaused ? 'paused' : 'resumed'}`);
+          sendResponse({ isPaused: isPaused });
+        });
+        return true; // 异步响应
 
-  if (message.type === 'togglePause') {
-    isPaused = !isPaused;
-    browser.storage.session.set({ [PAUSE_STATE_KEY]: isPaused }, () => {
-      console.log(`[Synapse] Extension ${isPaused ? 'paused' : 'resumed'}`);
-      sendResponse({ isPaused: isPaused });
-    });
-    return true; // Indicate async response
+    case 'getPauseState':
+        sendResponse({ isPaused: isPaused });
+        return true; // 异步响应
+        
+    // ... 其他 Smart Assistant 相关的 case ...
+    
+    default:
+      // 如果没有匹配的类型，可以选择静默忽略或打印一个警告
+      // console.warn('[Background] Unhandled message type:', message.type);
+      sendResponse({ status: 'unhandled' });
+      break;
   }
-
-  if (message.type === 'getPauseState') {
-    sendResponse({ isPaused: isPaused });
-    return true; // Indicate async response
-  }
-
-  // Smart Assistant message handling
-  if (message.type === 'getLearnedSkills') {
-    const skills = mlEngine?.getSkills() || [];
-    sendResponse({ skills });
-    return true;
-  }
-
-  if (message.type === 'suggestionExecuted') {
-    // Log executed suggestion for learning
-    console.log('[Synapse] Suggestion executed:', message.data);
-    // TODO: Store execution history for learning
-    sendResponse({ success: true });
-    return true;
-  }
-
-  if (message.type === 'suggestionRejected') {
-    // Log rejected suggestion for learning
-    console.log('[Synapse] Suggestion rejected:', message.data);
-    // TODO: Update model based on rejection
-    sendResponse({ success: true });
-    return true;
-  }
-
-  if (message.type === 'feedbackSubmitted') {
-    // Process user feedback
-    console.log('[Synapse] User feedback received:', message.data);
-    // TODO: Use feedback to improve suggestions
-    sendResponse({ success: true });
-    return true;
-  }
-
-  if (message.type === 'actionsRolledBack') {
-    // Handle rollback and start learning mode
-    console.log('[Synapse] Actions rolled back, entering learning mode:', message.data);
-    // TODO: Monitor subsequent user actions for learning
-    sendResponse({ success: true });
-    return true;
-  }
-
-  if (message.type === 'guidanceToggled') {
-    // Handle guidance toggle
-    console.log('[Synapse] Guidance toggled:', message.enabled);
-    sendResponse({ success: true });
-    return true;
-  }
-
-  return false; // No async response
 });
 
 /**

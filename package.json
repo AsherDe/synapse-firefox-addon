@@ -17,7 +17,7 @@
     "firefox"
   ],
   "scripts": {
-    "build": "tsc && node build.js && web-ext build",
+    "build": "tsc && node build.js && web-ext build --overwrite-dest",
     "start": "web-ext run --target=firefox-desktop",
     "watch": "tsc --watch"
   },

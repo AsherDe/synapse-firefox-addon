@@ -54,12 +54,14 @@ declare var browser: any; // webextension-polyfill provides this globally
 
 const sendToBackground = (message: any) => {
   if (browser && browser.runtime && browser.runtime.sendMessage) {
-    try {
-      browser.runtime.sendMessage(message);
-      console.log('[Synapse] Message sent successfully');
-    } catch (e) {
-      console.warn('[Synapse] Failed to send message:', e);
-    }
+    browser.runtime.sendMessage(message, (response: any) => {
+      if (browser.runtime.lastError) {
+        console.warn('[Synapse] Failed to send message:', browser.runtime.lastError.message);
+      } else {
+        // 你可以根据需要选择是否保留这个成功的日志
+        // console.log('[Synapse] Message sent successfully, response:', response);
+      }
+    });
   } else {
     console.warn('[Synapse] Browser API not available');
   }
@@ -306,7 +308,7 @@ class TextInputAggregator {
   private inputStartTime: number = 0;
   private inputTimer: number | null = null;
   private isComposing: boolean = false;
-  private readonly INPUT_TIMEOUT = 1000; // 1秒无输入后提交
+  private readonly INPUT_TIMEOUT = 2500; // 2.5秒无输入后提交
 
   constructor() {
     this.setupEventListeners();
@@ -523,7 +525,7 @@ class EventThrottler {
   private lastEventTime: number = 0;
   private eventQueue: Array<{event: any, callback: () => void}> = [];
   private throttleTimer: number | null = null;
-  private readonly MIN_EVENT_INTERVAL = 20; // 20ms minimum between events
+  private readonly MIN_EVENT_INTERVAL = 100; // 100ms minimum between events
   private readonly MAX_QUEUE_SIZE = 30;
 
   public throttleEvent(event: any, callback: () => void): void {
@@ -686,7 +688,7 @@ function setupScrollMonitoring(): void {
         console.log('[Synapse] Scroll event skipped - conditions not met');
       }
       lastScrollTop = currentScrollTop; // Update position regardless of whether event was sent
-    }, 250); // Throttle scroll events to at most 4 times per second
+    }, 500); // Throttle scroll events to at most 2 times per second
   }, { passive: true });
 }
 
@@ -742,7 +744,7 @@ function setupMouseMoveMonitoring(): void {
           mouseTrail = []; // Reset trail after sending
         }
       }
-    }, 100); // Debounce mouse movement analysis - 降低收集频率
+    }, 300); // Debounce mouse movement analysis - 降低收集频率
   }, { passive: true });
 }
 
