@@ -8,34 +8,36 @@
 /// <reference path="./types.ts" />
 
 /**
- * Browser API compatibility using webextension-polyfill
+ * Page context communication with content script via postMessage
+ * Since smart-assistant runs in page context, it can't access browser APIs directly
  */
-declare var browser: any; // webextension-polyfill provides this globally
 
-// Simplified API access using webextension-polyfill
-const browserAPI = browser || {
-  // Fallback for environments where neither is available
-  runtime: {
-    sendMessage: () => Promise.resolve(),
-    onMessage: { addListener: () => {} },
-    connect: () => ({ 
-      onMessage: { addListener: () => {} }, 
-      postMessage: () => {},
-      onDisconnect: { addListener: () => {} }
-    })
-  },
-  storage: {
-    local: {
-      get: (keys: any, callback: (result: any) => void) => {
-        if (callback) callback({});
-        return Promise.resolve({});
-      },
-      set: (items: any, callback?: () => void) => {
-        if (callback) callback();
-        return Promise.resolve();
+// Message passing helper for communicating with content script
+const sendToContentScript = (message: any): Promise<any> => {
+  return new Promise((resolve, reject) => {
+    const messageId = Date.now() + Math.random();
+    const messageWithId = { ...message, _messageId: messageId, _source: 'smart-assistant' };
+    
+    const responseHandler = (event: MessageEvent) => {
+      if (event.source === window && event.data._responseId === messageId) {
+        window.removeEventListener('message', responseHandler);
+        if (event.data.error) {
+          reject(new Error(event.data.error));
+        } else {
+          resolve(event.data.response);
+        }
       }
-    }
-  }
+    };
+    
+    window.addEventListener('message', responseHandler);
+    window.postMessage(messageWithId, '*');
+    
+    // Timeout after 5 seconds
+    setTimeout(() => {
+      window.removeEventListener('message', responseHandler);
+      reject(new Error('Message timeout'));
+    }, 5000);
+  });
 };
 
 interface OperationSuggestion {
@@ -97,7 +99,7 @@ interface UserFeedback {
 class SmartAssistant {
   private state: AssistantState;
   private assistantElement: HTMLElement | null = null;
-  private backgroundPort: any | null = null;
+  // Note: Message passing is now handled via sendToContentScript function
   private observedPatterns: Map<string, OperationSuggestion> = new Map();
   private executionHistory: Array<{
     suggestion: OperationSuggestion;
@@ -129,22 +131,22 @@ class SmartAssistant {
    */
   private initializeConnection(): void {
     try {
-      this.backgroundPort = browserAPI.runtime.connect({ name: 'smart-assistant' });
-      
-      this.backgroundPort.onMessage.addListener((message: any) => {
-        this.handleBackgroundMessage(message);
+      // Set up message listener for background messages via content script
+      window.addEventListener('message', (event: MessageEvent) => {
+        if (event.source === window && event.data._target === 'smart-assistant' && event.data._fromBackground) {
+          this.handleBackgroundMessage(event.data.message);
+        }
       });
       
-      this.backgroundPort.onDisconnect.addListener(() => {
-        console.log('[SmartAssistant] Background connection lost, reconnecting...');
-        setTimeout(() => this.initializeConnection(), 1000);
+      // Notify content script that smart assistant is ready and request skills
+      sendToContentScript({ type: 'smart-assistant-ready' }).then(() => {
+        return sendToContentScript({ type: 'getLearnedSkills' });
+      }).catch(error => {
+        console.error('[SmartAssistant] Failed to initialize:', error);
       });
-      
-      // Request current learned skill patterns
-      this.backgroundPort.postMessage({ type: 'getLearnedSkills' });
       
     } catch (error) {
-      console.error('[SmartAssistant] Failed to connect to background:', error);
+      console.error('[SmartAssistant] Failed to initialize:', error);
     }
   }
 
@@ -152,10 +154,15 @@ class SmartAssistant {
    * Load assistant settings
    */
   private loadSettings(): void {
-    browserAPI.storage.local.get(['assistantEnabled'], (result: any) => {
+    sendToContentScript({ 
+      type: 'storage-get', 
+      keys: ['assistantEnabled'] 
+    }).then(result => {
       if (result.assistantEnabled !== undefined) {
         this.state.isEnabled = result.assistantEnabled;
       }
+    }).catch(error => {
+      console.error('[SmartAssistant] Failed to load settings:', error);
     });
   }
 
@@ -163,8 +170,11 @@ class SmartAssistant {
    * Save assistant settings
    */
   private saveSettings(): void {
-    browserAPI.storage.local.set({ 
-      assistantEnabled: this.state.isEnabled 
+    sendToContentScript({ 
+      type: 'storage-set', 
+      data: { assistantEnabled: this.state.isEnabled }
+    }).catch(error => {
+      console.error('[SmartAssistant] Failed to save settings:', error);
     });
   }
 
@@ -180,7 +190,7 @@ class SmartAssistant {
     }
     
     // Notify background about the change
-    this.backgroundPort?.postMessage({
+    sendToContentScript({
       type: 'guidanceToggled',
       data: { enabled: this.state.isEnabled }
     });
@@ -590,7 +600,7 @@ class SmartAssistant {
     }
     
     // Send to background for pattern analysis
-    this.backgroundPort?.postMessage({
+    sendToContentScript({
       type: 'userAction',
       data: {
         type,
@@ -928,7 +938,7 @@ class SmartAssistant {
       this.renderSuggestion();
       
       // Record execution history
-      this.backgroundPort?.postMessage({
+      sendToContentScript({
         type: 'suggestionExecuted',
         data: {
           suggestion: this.state.currentSuggestion,
@@ -1022,7 +1032,7 @@ class SmartAssistant {
       // Collect rejection feedback
       this.collectRejectionFeedback();
       
-      this.backgroundPort?.postMessage({
+      sendToContentScript({
         type: 'suggestionRejected',
         data: {
           suggestion: this.state.currentSuggestion,
@@ -1046,7 +1056,7 @@ class SmartAssistant {
     const reason = prompt('Quick feedback: Why didn\'t this suggestion help? (optional)');
     if (reason) {
       this.state.userFeedback.comment = reason;
-      this.backgroundPort?.postMessage({
+      sendToContentScript({
         type: 'feedbackSubmitted',
         data: {
           suggestion: this.state.currentSuggestion,
@@ -1144,7 +1154,7 @@ class SmartAssistant {
       this.clearSubtleHints();
       
       // Record hint interaction
-      this.backgroundPort?.postMessage({
+      sendToContentScript({
         type: 'hintInteraction',
         data: {
           hintId: hint.id,
@@ -1208,7 +1218,7 @@ class SmartAssistant {
     });
     
     // Record autofill usage
-    this.backgroundPort?.postMessage({
+    sendToContentScript({
       type: 'autofillExecuted',
       data: {
         autofill: autofill,
@@ -1244,7 +1254,7 @@ class SmartAssistant {
         timestamp: Date.now()
       };
       
-      this.backgroundPort?.postMessage({
+      sendToContentScript({
         type: 'feedbackSubmitted',
         data: {
           suggestion: this.state.currentSuggestion,
@@ -1309,7 +1319,7 @@ class SmartAssistant {
       // Start monitoring user's actual actions for learning
       this.startLearningMode();
       
-      this.backgroundPort?.postMessage({
+      sendToContentScript({
         type: 'actionsRolledBack',
         data: {
           suggestion: this.state.currentSuggestion,

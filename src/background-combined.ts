@@ -36,6 +36,9 @@ async function backgroundGeneralizeURL(url: string, tabId?: number): Promise<str
 // This assumes TensorFlow.js is available globally as 'tf'
 declare const tf: any;
 
+// Browser API compatibility using webextension-polyfill
+declare var browser: any; // webextension-polyfill provides this globally
+
 // Type definitions for TensorFlow.js objects
 interface TensorFlowModel {
   predict(input: any): any;
@@ -270,7 +273,7 @@ class MLEngine {
 
   private async loadVocabulary(): Promise<void> {
     try {
-      const result = await chrome.storage.local.get([VOCABULARY_STORAGE_KEY]);
+      const result = await browser.storage.local.get([VOCABULARY_STORAGE_KEY]);
       if (result[VOCABULARY_STORAGE_KEY]) {
         const vocabData = result[VOCABULARY_STORAGE_KEY] as [string, number][];
         this.vocabulary = new Map(vocabData);
@@ -284,7 +287,7 @@ class MLEngine {
   private async saveVocabulary(): Promise<void> {
     try {
       const vocabData = Array.from(this.vocabulary.entries());
-      await chrome.storage.local.set({ [VOCABULARY_STORAGE_KEY]: vocabData });
+      await browser.storage.local.set({ [VOCABULARY_STORAGE_KEY]: vocabData });
     } catch (error) {
       console.error('[MLEngine] Error saving vocabulary:', error);
     }
@@ -292,7 +295,7 @@ class MLEngine {
 
   private async loadSkills(): Promise<void> {
     try {
-      const result = await chrome.storage.local.get([SKILLS_STORAGE_KEY]);
+      const result = await browser.storage.local.get([SKILLS_STORAGE_KEY]);
       if (result[SKILLS_STORAGE_KEY]) {
         const skillsData = result[SKILLS_STORAGE_KEY] as [string, ActionSkill][];
         this.skillsDatabase = new Map(skillsData);
@@ -305,7 +308,7 @@ class MLEngine {
   private async saveSkills(): Promise<void> {
     try {
       const skillsData = Array.from(this.skillsDatabase.entries());
-      await chrome.storage.local.set({ [SKILLS_STORAGE_KEY]: skillsData });
+      await browser.storage.local.set({ [SKILLS_STORAGE_KEY]: skillsData });
     } catch (error) {
       console.error('[MLEngine] Error saving skills:', error);
     }
@@ -415,7 +418,7 @@ async function initializeDatabase(): Promise<void> {
 async function migrateLegacyData(): Promise<void> {
   try {
     const result = await new Promise<{ [key: string]: any }>(resolve => {
-      chrome.storage.session.get([SEQUENCE_STORAGE_KEY], resolve);
+      browser.storage.session.get([SEQUENCE_STORAGE_KEY], resolve);
     });
     
     const legacySequence = result[SEQUENCE_STORAGE_KEY] as GlobalActionSequence;
@@ -425,7 +428,7 @@ async function migrateLegacyData(): Promise<void> {
       
       // Clear legacy storage after successful migration
       await new Promise<void>(resolve => {
-        chrome.storage.session.set({ [SEQUENCE_STORAGE_KEY]: [] }, resolve);
+        browser.storage.session.set({ [SEQUENCE_STORAGE_KEY]: [] }, resolve);
       });
       
       console.log('[Synapse] Legacy data migration completed');
@@ -465,7 +468,7 @@ class SimpleEventTokenizer {
 
   private async initializeCodebook(): Promise<void> {
     try {
-      const stored = await chrome.storage.local.get(['tokenizer_codebook']);
+      const stored = await browser.storage.local.get(['tokenizer_codebook']);
       if (stored.tokenizer_codebook && stored.tokenizer_codebook.length > 0) {
         this.codebook = stored.tokenizer_codebook;
         this.isInitialized = true;
@@ -497,7 +500,7 @@ class SimpleEventTokenizer {
 
   private async saveCodebook(): Promise<void> {
     try {
-      await chrome.storage.local.set({ tokenizer_codebook: this.codebook });
+      await browser.storage.local.set({ tokenizer_codebook: this.codebook });
     } catch (error) {
       console.error('[Synapse] Error saving codebook:', error);
     }
@@ -606,7 +609,7 @@ class SimpleSequencePredictor {
 
   private async loadPatterns(): Promise<void> {
     try {
-      const stored = await chrome.storage.local.get(['predictor_patterns']);
+      const stored = await browser.storage.local.get(['predictor_patterns']);
       if (stored.predictor_patterns) {
         this.patterns = new Map(stored.predictor_patterns);
       }
@@ -617,7 +620,7 @@ class SimpleSequencePredictor {
 
   private async savePatterns(): Promise<void> {
     try {
-      await chrome.storage.local.set({ 
+      await browser.storage.local.set({ 
         predictor_patterns: Array.from(this.patterns.entries()) 
       });
     } catch (error) {
@@ -724,7 +727,7 @@ const mlEngine = new MLEngine();
 const skillDetector = new SkillDetector();
 
 // Create ML Worker instance
-const mlWorker = new Worker(chrome.runtime.getURL('dist/ml-worker.js'));
+const mlWorker = new Worker(browser.runtime.getURL('dist/ml-worker.js'));
 let mlWorkerReady = false;
 
 // Listen for messages from ML Worker
@@ -740,7 +743,7 @@ mlWorker.onmessage = (event) => {
     if (event.data.success) {
       console.log(`[Background] ML Worker training completed. Vocab: ${event.data.vocabSize}, Skills: ${event.data.skillsCount}`);
       // Store training results in session storage for popup
-      chrome.storage.session.set({
+      browser.storage.session.set({
         mlWorkerInfo: {
           vocabSize: event.data.vocabSize,
           skillsCount: event.data.skillsCount,
@@ -756,7 +759,7 @@ mlWorker.onmessage = (event) => {
     if (event.data.prediction) {
       console.log(`[Background] ML Worker prediction: ${event.data.prediction.token} (confidence: ${(event.data.prediction.confidence * 100).toFixed(1)}%)`);
       // Store worker prediction
-      chrome.storage.session.set({ 
+      browser.storage.session.set({ 
         lastPrediction: {
           token: event.data.prediction.token,
           confidence: event.data.prediction.confidence,
@@ -769,7 +772,7 @@ mlWorker.onmessage = (event) => {
   
   if (type === 'skills_result') {
     // Store skills from worker
-    chrome.storage.session.set({
+    browser.storage.session.set({
       workerSkills: event.data.skills.slice(0, 10)
     });
   }
@@ -779,7 +782,7 @@ mlWorker.onmessage = (event) => {
     if (event.data.success) {
       console.log(`[Background] Codebook updated in Worker: ${event.data.eventsProcessed} events processed in ${event.data.updateDuration.toFixed(2)}ms`);
       // Store the codebook for potential use in background script
-      chrome.storage.local.set({ 
+      browser.storage.local.set({ 
         worker_codebook: event.data.codebook,
         codebook_updated: Date.now()
       });
@@ -803,7 +806,7 @@ mlWorker.onmessage = (event) => {
     if (event.data.success) {
       console.log(`[Background] Incremental learning completed: ${event.data.experienceCount} experiences processed, buffer utilization: ${(event.data.bufferUtilization * 100).toFixed(1)}%`);
       // Store incremental learning metrics
-      chrome.storage.session.set({
+      browser.storage.session.set({
         incrementalLearningMetrics: {
           experienceCount: event.data.experienceCount,
           bufferUtilization: event.data.bufferUtilization,
@@ -898,7 +901,7 @@ async function flushEventBatch(): Promise<void> {
     } else {
       // Fallback to chrome.storage.session if IndexedDB not available
       const result = await new Promise<{ [key: string]: any }>(resolve => {
-        chrome.storage.session.get([SEQUENCE_STORAGE_KEY], resolve);
+        browser.storage.session.get([SEQUENCE_STORAGE_KEY], resolve);
       });
       
       const currentSequence = (result[SEQUENCE_STORAGE_KEY] || []) as GlobalActionSequence;
@@ -912,7 +915,7 @@ async function flushEventBatch(): Promise<void> {
       }
       
       await new Promise<void>(resolve => {
-        chrome.storage.session.set({ [SEQUENCE_STORAGE_KEY]: currentSequence }, resolve);
+        browser.storage.session.set({ [SEQUENCE_STORAGE_KEY]: currentSequence }, resolve);
       });
       
       console.log(`[Synapse] Fallback batch written: ${eventBatch.length} events. Total: ${currentSequence.length}`);
@@ -947,7 +950,7 @@ async function handleMLOperationsAsync(): Promise<void> {
     } else {
       // Fallback to chrome.storage.session
       const result = await new Promise<{ [key: string]: any }>(resolve => {
-        chrome.storage.session.get([SEQUENCE_STORAGE_KEY], resolve);
+        browser.storage.session.get([SEQUENCE_STORAGE_KEY], resolve);
       });
       currentSequence = (result[SEQUENCE_STORAGE_KEY] || []) as GlobalActionSequence;
     }
@@ -1007,7 +1010,7 @@ async function handleMLOperations(currentSequence: GlobalActionSequence): Promis
           console.log(`[Synapse] Detected ${detectedSkills.length} behavioral skills`);
           
           // Store skills for popup display
-          chrome.storage.session.set({
+          browser.storage.session.set({
             detectedSkills: detectedSkills.slice(0, 10), // Store top 10 skills
             skillStats: skillDetector.getSkillStats()
           });
@@ -1032,7 +1035,7 @@ async function handleMLOperations(currentSequence: GlobalActionSequence): Promis
         // A/B Test: Show intelligent predictions to test group users
         if (abTestInitialized && isUserInTestGroup && matchedSkill.confidence > 0.7) {
           try {
-            chrome.notifications.create(`synapse_prediction_${Date.now()}`, {
+            browser.notifications.create(`synapse_prediction_${Date.now()}`, {
               type: 'basic',
               iconUrl: 'icons/icon-48.png',
               title: 'Synapse 智能预测',
@@ -1059,7 +1062,7 @@ async function handleMLOperations(currentSequence: GlobalActionSequence): Promis
         }
         
         // Store skill prediction
-        chrome.storage.session.set({
+        browser.storage.session.set({
           lastPrediction: {
             skillName: matchedSkill.name,
             skillDescription: matchedSkill.description,
@@ -1091,7 +1094,7 @@ async function handleMLOperations(currentSequence: GlobalActionSequence): Promis
             }
             
             // Store advanced prediction
-            chrome.storage.session.set({ 
+            browser.storage.session.set({ 
               lastPrediction: {
                 token: advancedPrediction.token,
                 confidence: advancedPrediction.confidence,
@@ -1123,7 +1126,7 @@ async function handleMLOperations(currentSequence: GlobalActionSequence): Promis
           }
           
           // Store simple prediction
-          chrome.storage.session.set({ 
+          browser.storage.session.set({ 
             lastPrediction: {
               tokenId: simplePrediction.tokenId,
               confidence: simplePrediction.confidence,
@@ -1276,7 +1279,7 @@ async function performIdleTraining(sequence: GlobalActionSequence): Promise<void
         console.log(`[Synapse] Detected ${detectedSkills.length} behavioral skills during idle training`);
         
         // Store skills for popup display
-        chrome.storage.session.set({
+        browser.storage.session.set({
           detectedSkills: detectedSkills.slice(0, 10),
           skillStats: skillDetector.getSkillStats()
         });
@@ -1295,15 +1298,15 @@ async function performIdleTraining(sequence: GlobalActionSequence): Promise<void
 function initializeIdleDetection(): void {
   try {
     // Set up idle detection interval
-    chrome.idle.setDetectionInterval(IDLE_DETECTION_INTERVAL);
+    browser.idle.setDetectionInterval(IDLE_DETECTION_INTERVAL);
     
     // Listen for idle state changes
-    chrome.idle.onStateChanged.addListener((state: chrome.idle.IdleState) => {
+    browser.idle.onStateChanged.addListener((state: any) => {
       handleIdleStateChange(state);
     });
     
     // Get initial idle state
-    chrome.idle.queryState(IDLE_DETECTION_INTERVAL, (state: chrome.idle.IdleState) => {
+    browser.idle.queryState(IDLE_DETECTION_INTERVAL, (state: any) => {
       currentIdleState = state;
       console.log(`[Synapse] Initial idle state: ${state}`);
     });
@@ -1317,7 +1320,7 @@ function initializeIdleDetection(): void {
 /**
  * Phase 2.1: Handle idle state changes for optimal training timing
  */
-async function handleIdleStateChange(newState: chrome.idle.IdleState): Promise<void> {
+async function handleIdleStateChange(newState: any): Promise<void> {
   const previousState = currentIdleState;
   currentIdleState = newState;
   
@@ -1355,7 +1358,7 @@ async function handleUserBecameIdle(): Promise<void> {
     } else {
       // Fallback to chrome.storage.session
       const result = await new Promise<{ [key: string]: any }>(resolve => {
-        chrome.storage.session.get([SEQUENCE_STORAGE_KEY], resolve);
+        browser.storage.session.get([SEQUENCE_STORAGE_KEY], resolve);
       });
       trainingSequence = result[SEQUENCE_STORAGE_KEY] || [];
     }
@@ -1403,7 +1406,7 @@ function handleUserBecameActive(): void {
 async function performIdleTrainingOptimized(sequence: GlobalActionSequence): Promise<void> {
   try {
     // Check if user is still idle before starting intensive operations
-    chrome.idle.queryState(IDLE_DETECTION_INTERVAL, async (state: chrome.idle.IdleState) => {
+    browser.idle.queryState(IDLE_DETECTION_INTERVAL, async (state: any) => {
       if (state === 'active') {
         console.log('[Synapse] User became active, skipping intensive training');
         return;
@@ -1434,7 +1437,7 @@ async function performIdleTrainingOptimized(sequence: GlobalActionSequence): Pro
 /**
  * Main message listener for events from content scripts and popups.
  */
-chrome.runtime.onMessage.addListener((message: RawUserAction | { type: string; data?: any; enabled?: boolean }, sender, sendResponse) => {
+browser.runtime.onMessage.addListener((message: RawUserAction | { type: string; data?: any; enabled?: boolean }, sender: any, sendResponse: any) => {
   const { type } = message;
 
   const context = {
@@ -1478,7 +1481,7 @@ chrome.runtime.onMessage.addListener((message: RawUserAction | { type: string; d
 
   // Handle requests from the popup
   if (type === 'getSequence') {
-    chrome.storage.session.get([SEQUENCE_STORAGE_KEY], (result) => {
+    browser.storage.session.get([SEQUENCE_STORAGE_KEY], (result: any) => {
       sendResponse({ sequence: result[SEQUENCE_STORAGE_KEY] || [] });
     });
     return true; // Indicate async response
@@ -1489,7 +1492,7 @@ chrome.runtime.onMessage.addListener((message: RawUserAction | { type: string; d
       if (dbManager) {
         await dbManager.clearAllEvents();
       } else {
-        chrome.storage.session.set({ [SEQUENCE_STORAGE_KEY]: [] }, () => {});
+        browser.storage.session.set({ [SEQUENCE_STORAGE_KEY]: [] }, () => {});
       }
       eventBatch = [];
       sequenceSize = 0;
@@ -1500,7 +1503,7 @@ chrome.runtime.onMessage.addListener((message: RawUserAction | { type: string; d
   }
 
   if (message.type === 'getPrediction') {
-    chrome.storage.session.get(['lastPrediction'], (result) => {
+    browser.storage.session.get(['lastPrediction'], (result: any) => {
       sendResponse({ prediction: result.lastPrediction || null });
     });
     return true; // Indicate async response
@@ -1510,7 +1513,7 @@ chrome.runtime.onMessage.addListener((message: RawUserAction | { type: string; d
     const simpleModelInfo = predictor.getModelInfo();
     
     if (mlWorkerReady) {
-      chrome.storage.session.get(['mlWorkerInfo'], (result) => {
+      browser.storage.session.get(['mlWorkerInfo'], (result: any) => {
         const workerInfo = result.mlWorkerInfo || { vocabSize: 0, skillsCount: 0 };
         const advancedModelInfo = {
           vocabSize: workerInfo.vocabSize,
@@ -1547,7 +1550,7 @@ chrome.runtime.onMessage.addListener((message: RawUserAction | { type: string; d
     if (mlWorkerReady) {
       mlWorker.postMessage({ type: 'getSkills' });
       // Response will be stored in session storage by worker message handler
-      chrome.storage.session.get(['workerSkills'], (result) => {
+      browser.storage.session.get(['workerSkills'], (result: any) => {
         sendResponse({ skills: result.workerSkills || [] });
       });
     } else {
@@ -1558,7 +1561,7 @@ chrome.runtime.onMessage.addListener((message: RawUserAction | { type: string; d
   }
 
   if (message.type === 'getCodebookInfo') {
-    chrome.storage.local.get(['tokenizer_codebook'], (result) => {
+    browser.storage.local.get(['tokenizer_codebook'], (result: any) => {
       const codebook = result.tokenizer_codebook || [];
       const info = {
         codebookSize: codebook.length,
@@ -1573,7 +1576,7 @@ chrome.runtime.onMessage.addListener((message: RawUserAction | { type: string; d
 
   if (message.type === 'togglePause') {
     isPaused = !isPaused;
-    chrome.storage.session.set({ [PAUSE_STATE_KEY]: isPaused }, () => {
+    browser.storage.session.set({ [PAUSE_STATE_KEY]: isPaused }, () => {
       console.log(`[Synapse] Extension ${isPaused ? 'paused' : 'resumed'}`);
       sendResponse({ isPaused: isPaused });
     });
@@ -1637,7 +1640,7 @@ chrome.runtime.onMessage.addListener((message: RawUserAction | { type: string; d
 /**
  * Listeners for browser-level tab events.
  */
-chrome.tabs.onActivated.addListener(async (activeInfo) => {
+browser.tabs.onActivated.addListener(async (activeInfo: any) => {
   const payload: TabActivatedPayload = {
     tabId: activeInfo.tabId,
     windowId: activeInfo.windowId,
@@ -1651,7 +1654,7 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
   await addEventToSequence(event);
 });
 
-chrome.tabs.onCreated.addListener(async (tab) => {
+browser.tabs.onCreated.addListener(async (tab: any) => {
   const payload: TabCreatedPayload = {
     tabId: tab.id!,
     windowId: tab.windowId,
@@ -1666,7 +1669,7 @@ chrome.tabs.onCreated.addListener(async (tab) => {
   await addEventToSequence(event);
 });
 
-chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+browser.tabs.onUpdated.addListener(async (tabId: any, changeInfo: any, tab: any) => {
   if (changeInfo.status === 'complete' && changeInfo.url) {
     const payload: TabUpdatedPayload = {
       tabId: tabId,
@@ -1683,7 +1686,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   }
 });
 
-chrome.tabs.onRemoved.addListener(async (tabId, removeInfo) => {
+browser.tabs.onRemoved.addListener(async (tabId: any, removeInfo: any) => {
   const payload: TabRemovedPayload = {
     tabId,
     windowId: removeInfo.windowId,
@@ -1700,7 +1703,7 @@ chrome.tabs.onRemoved.addListener(async (tabId, removeInfo) => {
 // Initialize pause state from storage
 async function initializePauseState(): Promise<void> {
   try {
-    const result = await chrome.storage.session.get([PAUSE_STATE_KEY]);
+    const result = await browser.storage.session.get([PAUSE_STATE_KEY]);
     isPaused = result[PAUSE_STATE_KEY] || false;
     console.log(`[Synapse] Pause state initialized: ${isPaused ? 'paused' : 'active'}`);
   } catch (error) {
@@ -1712,7 +1715,7 @@ async function initializePauseState(): Promise<void> {
 // Initialize A/B test assignment
 async function initializeABTest(): Promise<void> {
   try {
-    const result = await chrome.storage.local.get(['ab_test_group']);
+    const result = await browser.storage.local.get(['ab_test_group']);
     if (result.ab_test_group) {
       // User already assigned to a group
       isUserInTestGroup = result.ab_test_group === 'test';
@@ -1721,7 +1724,7 @@ async function initializeABTest(): Promise<void> {
       // First time user - randomly assign to test or control group
       isUserInTestGroup = Math.random() < 0.5;
       const group = isUserInTestGroup ? 'test' : 'control';
-      await chrome.storage.local.set({ 'ab_test_group': group });
+      await browser.storage.local.set({ 'ab_test_group': group });
       console.log(`[Synapse] User assigned to A/B test group: ${group}`);
     }
     abTestInitialized = true;
@@ -1747,17 +1750,17 @@ initializeABTest();
 initializeIdleDetection();
 
 // Long-lived connections for real-time popup updates
-const popupConnections = new Set<chrome.runtime.Port>();
-const assistantConnections = new Set<chrome.runtime.Port>();
+const popupConnections = new Set<any>();
+const assistantConnections = new Set<any>();
 
 // Handle long-lived connections from popup and smart assistant
-chrome.runtime.onConnect.addListener((port) => {
+browser.runtime.onConnect.addListener((port: any) => {
   if (port.name === 'popup') {
     console.log('[Synapse] Popup connected via long-lived connection');
     popupConnections.add(port);
     
     // Handle messages from popup
-    port.onMessage.addListener(async (message) => {
+    port.onMessage.addListener(async (message: any) => {
       await handlePopupMessage(port, message);
     });
     
@@ -1771,7 +1774,7 @@ chrome.runtime.onConnect.addListener((port) => {
     assistantConnections.add(port);
     
     // Handle messages from smart assistant
-    port.onMessage.addListener(async (message) => {
+    port.onMessage.addListener(async (message: any) => {
       await handleAssistantMessage(port, message);
     });
     
@@ -1786,7 +1789,7 @@ chrome.runtime.onConnect.addListener((port) => {
 /**
  * Handle messages from smart assistant via long-lived connection
  */
-async function handleAssistantMessage(port: chrome.runtime.Port, message: any): Promise<void> {
+async function handleAssistantMessage(port: any, message: any): Promise<void> {
   try {
     switch (message.type) {
       case 'getLearnedSkills':
@@ -1860,7 +1863,7 @@ async function handleAssistantMessage(port: chrome.runtime.Port, message: any): 
 /**
  * Handle messages from popup via long-lived connection
  */
-async function handlePopupMessage(port: chrome.runtime.Port, message: any): Promise<void> {
+async function handlePopupMessage(port: any, message: any): Promise<void> {
   const { type, messageId } = message;
   
   try {
@@ -1877,13 +1880,13 @@ async function handlePopupMessage(port: chrome.runtime.Port, message: any): Prom
         } else {
           // Fallback to chrome.storage.session
           const sequenceResult = await new Promise<{ [key: string]: any }>(resolve => {
-            chrome.storage.session.get([SEQUENCE_STORAGE_KEY], resolve);
+            browser.storage.session.get([SEQUENCE_STORAGE_KEY], resolve);
           });
           sequence = sequenceResult[SEQUENCE_STORAGE_KEY] || [];
         }
         
         const predictionResult = await new Promise<{ [key: string]: any }>(resolve => {
-          chrome.storage.session.get(['lastPrediction'], resolve);
+          browser.storage.session.get(['lastPrediction'], resolve);
         });
         
         response = {
@@ -1907,7 +1910,7 @@ async function handlePopupMessage(port: chrome.runtime.Port, message: any): Prom
         } else {
           // Fallback to chrome.storage.session
           await new Promise<void>(resolve => {
-            chrome.storage.session.set({ [SEQUENCE_STORAGE_KEY]: [] }, resolve);
+            browser.storage.session.set({ [SEQUENCE_STORAGE_KEY]: [] }, resolve);
           });
         }
         
@@ -1928,7 +1931,7 @@ async function handlePopupMessage(port: chrome.runtime.Port, message: any): Prom
       case 'togglePause':
         isPaused = !isPaused;
         await new Promise<void>(resolve => {
-          chrome.storage.session.set({ [PAUSE_STATE_KEY]: isPaused }, resolve);
+          browser.storage.session.set({ [PAUSE_STATE_KEY]: isPaused }, resolve);
         });
         response = { isPaused };
         
@@ -1972,21 +1975,21 @@ function notifyPopups(type: string, data: any): void {
 }
 
 // Ensure batch is flushed on extension shutdown
-chrome.runtime.onSuspend.addListener(async () => {
+browser.runtime.onSuspend.addListener(async () => {
   console.log('[Synapse] Extension suspending, flushing event batch...');
   await flushEventBatch();
 });
 
 // Initialize storage on startup
-chrome.runtime.onStartup.addListener(() => {
-  chrome.storage.session.set({ [SEQUENCE_STORAGE_KEY]: [] });
+browser.runtime.onStartup.addListener(() => {
+  browser.storage.session.set({ [SEQUENCE_STORAGE_KEY]: [] });
   console.log('[Synapse] New browser session started. Sequence cleared.');
   initializePauseState();
 });
 
 // Initialize storage on install
-chrome.runtime.onInstalled.addListener(() => {
-  chrome.storage.session.set({ [SEQUENCE_STORAGE_KEY]: [] });
+browser.runtime.onInstalled.addListener(() => {
+  browser.storage.session.set({ [SEQUENCE_STORAGE_KEY]: [] });
   console.log('[Synapse] Extension installed. Sequence storage initialized.');
   initializePauseState();
 });
@@ -1998,8 +2001,8 @@ chrome.runtime.onInstalled.addListener(() => {
 async function sendPatternDetectedSuggestion(prediction: any, type: string = 'advanced'): Promise<void> {
   try {
     // Get current active tab
-    const tabs = await new Promise<chrome.tabs.Tab[]>(resolve => {
-      chrome.tabs.query({ active: true, currentWindow: true }, resolve);
+    const tabs = await new Promise<any[]>(resolve => {
+      browser.tabs.query({ active: true, currentWindow: true }, resolve);
     });
     
     if (tabs.length === 0) {
@@ -2020,7 +2023,7 @@ async function sendPatternDetectedSuggestion(prediction: any, type: string = 'ad
     };
     
     // Send to content script
-    chrome.tabs.sendMessage(activeTab.id!, {
+    browser.tabs.sendMessage(activeTab.id!, {
       type: 'patternDetected',
       data: suggestion
     });

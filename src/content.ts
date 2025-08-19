@@ -742,7 +742,7 @@ function setupMouseMoveMonitoring(): void {
           mouseTrail = []; // Reset trail after sending
         }
       }
-    }, 30); // Debounce mouse movement analysis - 进一步降低延迟以收集更多轨迹
+    }, 100); // Debounce mouse movement analysis - 降低收集频率
   }, { passive: true });
 }
 
@@ -1272,6 +1272,62 @@ function initializeSmartAssistant(): void {
   }
 }
 
+// Listen for messages from smart assistant in page context
+window.addEventListener('message', async (event: MessageEvent) => {
+  if (event.source === window && event.data._source === 'smart-assistant') {
+    const { type, _messageId } = event.data;
+    
+    try {
+      let response = null;
+      
+      switch (type) {
+        case 'smart-assistant-ready':
+          console.log('[Synapse] Smart assistant ready');
+          break;
+          
+        case 'storage-get':
+          if (browser?.storage?.local) {
+            const result = await new Promise(resolve => {
+              browser.storage.local.get(event.data.keys, resolve);
+            });
+            response = result;
+          }
+          break;
+          
+        case 'storage-set':
+          if (browser?.storage?.local) {
+            await new Promise(resolve => {
+              browser.storage.local.set(event.data.data, resolve);
+            });
+            response = { success: true };
+          }
+          break;
+          
+        default:
+          // Forward other messages to background script
+          if (browser?.runtime) {
+            response = await new Promise(resolve => {
+              browser.runtime.sendMessage(event.data, resolve);
+            });
+          }
+          break;
+      }
+      
+      // Send response back to smart assistant
+      window.postMessage({
+        _responseId: _messageId,
+        response: response
+      }, '*');
+      
+    } catch (error) {
+      window.postMessage({
+        _responseId: _messageId,
+        error: String(error)
+      }, '*');
+    }
+  }
+});
+
 // Listen for messages from background script
 if (browser && browser.runtime) {
   browser.runtime.onMessage.addListener((message: any, _sender: any, sendResponse: any) => {
@@ -1289,6 +1345,13 @@ if (browser && browser.runtime) {
         sendResponse({ success: false, error: String(error) });
       }
       return true; // Keep message channel open for async response
+    } else {
+      // Forward other messages to smart assistant in page context
+      window.postMessage({
+        _target: 'smart-assistant',
+        _fromBackground: true,
+        message: message
+      }, '*');
     }
   });
 }

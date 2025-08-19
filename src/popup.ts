@@ -1,10 +1,13 @@
 /// <reference path="./types.ts" />
 // Licensed under the Apache License, Version 2.0
 
+// Browser API compatibility using webextension-polyfill
+declare var browser: any; // webextension-polyfill provides this globally
+
 class PopupController {
   private sequence: GlobalActionSequence = [];
   private updateInterval: number | null = null;
-  private backgroundPort: chrome.runtime.Port | null = null;
+  private backgroundPort: any | null = null;
 
   constructor() {
     this.setupBackgroundConnection();
@@ -22,10 +25,10 @@ class PopupController {
    */
   private setupBackgroundConnection(): void {
     try {
-      this.backgroundPort = chrome.runtime.connect({ name: 'popup' });
+      this.backgroundPort = browser.runtime.connect({ name: 'popup' });
       
       // Listen for real-time updates from background
-      this.backgroundPort.onMessage.addListener((message) => {
+      this.backgroundPort.onMessage.addListener((message: any) => {
         this.handleBackgroundMessage(message);
       });
       
@@ -106,9 +109,9 @@ class PopupController {
     return new Promise((resolve, reject) => {
       if (!this.backgroundPort) {
         // Fallback to regular message passing
-        chrome.runtime.sendMessage(message, (response) => {
-          if (chrome.runtime.lastError) {
-            reject(chrome.runtime.lastError);
+        browser.runtime.sendMessage(message, (response: any) => {
+          if (browser.runtime.lastError) {
+            reject(browser.runtime.lastError);
           } else {
             resolve(response);
           }
@@ -187,7 +190,7 @@ class PopupController {
 
   private clearSequence(): void {
     this.sendToBackground({ type: 'clearSequence' })
-      .then((response) => {
+      .then((response: any) => {
         if (response && response.success) {
           this.sequence = [];
           this.updateSequenceDisplay();
@@ -201,7 +204,7 @@ class PopupController {
 
   private loadSequence(): void {
     this.sendToBackground({ type: 'getSequence' })
-      .then((response) => {
+      .then((response: any) => {
         if (response && response.sequence) {
           this.sequence = response.sequence;
           this.updateSequenceDisplay();
@@ -213,9 +216,9 @@ class PopupController {
   }
 
   private loadPrediction(): void {
-    chrome.runtime.sendMessage({ type: 'getPrediction' }, (response) => {
-      if (chrome.runtime.lastError) {
-        console.error('Failed to load prediction:', chrome.runtime.lastError.message);
+    browser.runtime.sendMessage({ type: 'getPrediction' }, (response: any) => {
+      if (browser.runtime.lastError) {
+        console.error('Failed to load prediction:', browser.runtime.lastError.message);
         return;
       }
       this.updatePredictionDisplay(response?.prediction);
@@ -223,9 +226,9 @@ class PopupController {
   }
 
   private loadModelInfo(): void {
-    chrome.runtime.sendMessage({ type: 'getModelInfo' }, (response) => {
-      if (chrome.runtime.lastError) {
-        console.error('Failed to load model info:', chrome.runtime.lastError.message);
+    browser.runtime.sendMessage({ type: 'getModelInfo' }, (response: any) => {
+      if (browser.runtime.lastError) {
+        console.error('Failed to load model info:', browser.runtime.lastError.message);
         return;
       }
       this.updateModelInfoDisplay(response?.modelInfo, response?.isReady);
@@ -233,9 +236,9 @@ class PopupController {
   }
 
   private loadPauseState(): void {
-    chrome.runtime.sendMessage({ type: 'getPauseState' }, (response) => {
-      if (chrome.runtime.lastError) {
-        console.error('Failed to load pause state:', chrome.runtime.lastError.message);
+    browser.runtime.sendMessage({ type: 'getPauseState' }, (response: any) => {
+      if (browser.runtime.lastError) {
+        console.error('Failed to load pause state:', browser.runtime.lastError.message);
         return;
       }
       this.updatePauseUI(response?.isPaused || false);
@@ -243,20 +246,20 @@ class PopupController {
   }
 
   private loadGuidanceState(): void {
-    chrome.storage.local.get(['assistantEnabled'], (result) => {
+    browser.storage.local.get(['assistantEnabled'], (result: any) => {
       const isEnabled = result.assistantEnabled !== false; // Default to true
       this.updateGuidanceUI(isEnabled);
     });
   }
 
   private toggleGuidance(enabled: boolean): void {
-    chrome.storage.local.set({ assistantEnabled: enabled }, () => {
+    browser.storage.local.set({ assistantEnabled: enabled }, () => {
       console.log(`Smart guidance ${enabled ? 'enabled' : 'disabled'}`);
       
       // Notify content scripts about the change
-      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      browser.tabs.query({ active: true, currentWindow: true }, (tabs: any) => {
         if (tabs[0]?.id) {
-          chrome.tabs.sendMessage(tabs[0].id, {
+          browser.tabs.sendMessage(tabs[0].id, {
             type: 'guidanceToggled',
             enabled: enabled
           });
@@ -280,7 +283,7 @@ class PopupController {
 
   private togglePause(): void {
     this.sendToBackground({ type: 'togglePause' })
-      .then((response) => {
+      .then((response: any) => {
         if (response) {
           this.updatePauseUI(response.isPaused);
           console.log(`Extension ${response.isPaused ? 'paused' : 'resumed'}`);
@@ -538,7 +541,7 @@ class PopupController {
 
     if (codebookInfoElement) {
       // Request codebook info from background script
-      chrome.runtime.sendMessage({ type: 'getCodebookInfo' }, (response) => {
+      browser.runtime.sendMessage({ type: 'getCodebookInfo' }, (response: any) => {
         if (response && codebookInfoElement) {
           codebookInfoElement.textContent = JSON.stringify(response, null, 2);
         }
@@ -550,7 +553,7 @@ class PopupController {
     const modelArchElement = document.getElementById('modelArchitecture');
     const trainingHistoryElement = document.getElementById('trainingHistory');
 
-    chrome.runtime.sendMessage({ type: 'getModelInfo' }, (response) => {
+    browser.runtime.sendMessage({ type: 'getModelInfo' }, (response: any) => {
       if (modelArchElement && response?.modelInfo) {
         modelArchElement.textContent = JSON.stringify(response.modelInfo, null, 2);
       }
@@ -584,8 +587,8 @@ class PopupController {
 
     if (storageInfoElement) {
       // Get storage usage information
-      chrome.storage.session.getBytesInUse(null, (sessionBytes) => {
-        chrome.storage.local.getBytesInUse(null, (localBytes) => {
+      browser.storage.session.getBytesInUse(null, (sessionBytes: any) => {
+        browser.storage.local.getBytesInUse(null, (localBytes: any) => {
           const storageInfo = {
             sessionStorage: `${sessionBytes} bytes`,
             localStorage: `${localBytes} bytes`,
@@ -705,7 +708,7 @@ class PopupController {
 
   private async getSessionStorageData(): Promise<any> {
     return new Promise((resolve) => {
-      chrome.storage.session.get(null, (data) => {
+      browser.storage.session.get(null, (data: any) => {
         resolve(data);
       });
     });
@@ -713,7 +716,7 @@ class PopupController {
 
   private async getLocalStorageData(): Promise<any> {
     return new Promise((resolve) => {
-      chrome.storage.local.get(null, (data) => {
+      browser.storage.local.get(null, (data: any) => {
         resolve(data);
       });
     });
@@ -721,9 +724,9 @@ class PopupController {
 
   private async getModelInfoData(): Promise<any> {
     return new Promise((resolve) => {
-      chrome.runtime.sendMessage({ type: 'getModelInfo' }, (response) => {
-        chrome.runtime.sendMessage({ type: 'getCodebookInfo' }, (codebookResponse) => {
-          chrome.runtime.sendMessage({ type: 'getPrediction' }, (predictionResponse) => {
+      browser.runtime.sendMessage({ type: 'getModelInfo' }, (response: any) => {
+        browser.runtime.sendMessage({ type: 'getCodebookInfo' }, (codebookResponse: any) => {
+          browser.runtime.sendMessage({ type: 'getPrediction' }, (predictionResponse: any) => {
             resolve({
               modelInfo: response?.modelInfo,
               isReady: response?.isReady,
