@@ -50,7 +50,7 @@ class SynapseDataCleaner:
         # 增加对modifier_keys的处理
         modifier_keys = payload.get('modifier_keys', [])
         
-        return {
+        base_features = {
             'action_subtype': event['type'].replace('user_action_', ''),
             'element_role': features.get('element_role'),
             'element_text': str(features.get('element_text', ''))[:100],
@@ -69,6 +69,72 @@ class SynapseDataCleaner:
             'input_duration': payload.get('duration') if event['type'] == 'user_action_text_input' else None,
             'input_method': payload.get('input_method') if event['type'] == 'user_action_text_input' else None
         }
+        
+        # 特定事件类型的额外特征提取
+        event_type = event.get('type', '')
+        
+        if event_type == 'user_action_mouse_pattern':
+            # 鼠标模式特征
+            trail = payload.get('trail', [])
+            base_features.update({
+                'mouse_pattern_type': features.get('pattern_type'),
+                'mouse_movement_speed': features.get('movement_speed'),
+                'mouse_direction_changes': features.get('direction_changes'),
+                'mouse_total_distance': features.get('total_distance'),
+                'mouse_trail_length': len(trail),
+                'mouse_significance': features.get('significance')
+            })
+            
+        elif event_type == 'user_action_scroll':
+            # 滚动特征
+            base_features.update({
+                'scroll_direction': features.get('scroll_direction'),
+                'scroll_position': features.get('scroll_position'),
+                'scroll_percentage': features.get('scroll_percentage'),
+                'page_height': features.get('page_height'),
+                'viewport_height': features.get('viewport_height')
+            })
+            
+        elif event_type == 'user_action_form_submit':
+            # 表单提交特征
+            base_features.update({
+                'form_selector': payload.get('form_selector'),
+                'field_count': payload.get('field_count'),
+                'has_required_fields': payload.get('has_required_fields'),
+                'submit_method': payload.get('submit_method')
+            })
+            
+        elif event_type == 'user_action_focus_change':
+            # 焦点变化特征
+            base_features.update({
+                'focus_type': payload.get('focus_type'),
+                'from_selector': payload.get('from_selector'),
+                'to_selector': payload.get('to_selector')
+            })
+            
+        elif event_type == 'user_action_page_visibility':
+            # 页面可见性特征
+            base_features.update({
+                'visibility_state': payload.get('visibility_state'),
+                'previous_state': payload.get('previous_state'),
+                'time_on_page': features.get('time_on_page')
+            })
+            
+        elif event_type == 'user_action_mouse_hover':
+            # 鼠标悬停特征
+            base_features.update({
+                'hover_duration': payload.get('hover_duration')
+            })
+            
+        elif event_type == 'user_action_clipboard':
+            # 剪贴板特征
+            base_features.update({
+                'clipboard_operation': payload.get('operation'),
+                'text_length': payload.get('text_length'),
+                'has_formatting': payload.get('has_formatting')
+            })
+        
+        return base_features
     
     def _extract_browser_action_features(self, event: Dict[str, Any]) -> Dict[str, Any]:
         """提取浏览器行为特征"""
@@ -120,7 +186,23 @@ class SynapseDataCleaner:
             'time_range': {
                 'start': df['datetime'].min(),
                 'end': df['datetime'].max()
-            } if 'datetime' in df.columns else None
+            } if 'datetime' in df.columns else None,
+            # 特定事件类型统计
+            'mouse_pattern_stats': {
+                'total_mouse_patterns': len(df[df['event_type'] == 'user_action_mouse_pattern']),
+                'pattern_types': df[df['mouse_pattern_type'].notna()]['mouse_pattern_type'].value_counts().to_dict() if 'mouse_pattern_type' in df.columns else {}
+            },
+            'scroll_stats': {
+                'total_scrolls': len(df[df['event_type'] == 'user_action_scroll']),
+                'scroll_directions': df[df['scroll_direction'].notna()]['scroll_direction'].value_counts().to_dict() if 'scroll_direction' in df.columns else {}
+            },
+            'form_submit_stats': {
+                'total_form_submits': len(df[df['event_type'] == 'user_action_form_submit'])
+            },
+            'clipboard_stats': {
+                'total_clipboard_actions': len(df[df['event_type'] == 'user_action_clipboard']),
+                'clipboard_operations': df[df['clipboard_operation'].notna()]['clipboard_operation'].value_counts().to_dict() if 'clipboard_operation' in df.columns else {}
+            }
         }
         
         return stats
