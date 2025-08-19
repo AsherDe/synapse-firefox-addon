@@ -8,55 +8,35 @@
 /// <reference path="./types.ts" />
 
 /**
- * Browser API compatibility layer
+ * Browser API compatibility using webextension-polyfill
  */
-declare const browser: any;
+declare var browser: any; // webextension-polyfill provides this globally
 
-const browserAPI = (() => {
-  try {
-    if (typeof chrome !== 'undefined' && chrome?.runtime) {
-      console.log('[SmartAssistant] Using Chrome API');
-      return chrome;
-    }
-  } catch (e) {
-    console.log('[SmartAssistant] Chrome API not available:', e);
-  }
-  
-  try {
-    if (typeof browser !== 'undefined' && browser?.runtime) {
-      console.log('[SmartAssistant] Using Browser API');
-      return browser;
-    }
-  } catch (e) {
-    console.log('[SmartAssistant] Browser API not available:', e);
-  }
-  
-  console.log('[SmartAssistant] Using fallback API');
+// Simplified API access using webextension-polyfill
+const browserAPI = browser || {
   // Fallback for environments where neither is available
-  return {
-    runtime: {
-      sendMessage: () => Promise.resolve(),
-      onMessage: { addListener: () => {} },
-      connect: () => ({ 
-        onMessage: { addListener: () => {} }, 
-        postMessage: () => {},
-        onDisconnect: { addListener: () => {} }
-      })
-    },
-    storage: {
-      local: {
-        get: (keys: any, callback: (result: any) => void) => {
-          if (callback) callback({});
-          return Promise.resolve({});
-        },
-        set: (items: any, callback?: () => void) => {
-          if (callback) callback();
-          return Promise.resolve();
-        }
+  runtime: {
+    sendMessage: () => Promise.resolve(),
+    onMessage: { addListener: () => {} },
+    connect: () => ({ 
+      onMessage: { addListener: () => {} }, 
+      postMessage: () => {},
+      onDisconnect: { addListener: () => {} }
+    })
+  },
+  storage: {
+    local: {
+      get: (keys: any, callback: (result: any) => void) => {
+        if (callback) callback({});
+        return Promise.resolve({});
+      },
+      set: (items: any, callback?: () => void) => {
+        if (callback) callback();
+        return Promise.resolve();
       }
     }
-  };
-})();
+  }
+};
 
 interface OperationSuggestion {
   id: string;

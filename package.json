@@ -24,10 +24,12 @@
   "devDependencies": {
     "@types/chrome": "^0.0.268",
     "@types/node": "^20.0.0",
+    "@types/webextension-polyfill": "^0.12.3",
     "typescript": "^5.9.2",
     "web-ext": "^7.0.0"
   },
   "dependencies": {
-    "@tensorflow/tfjs": "^4.22.0"
+    "@tensorflow/tfjs": "^4.22.0",
+    "webextension-polyfill": "^0.12.0"
   }
 }

@@ -14,10 +14,19 @@
  * limitations under the License.
  */
 
-import { generateGeneralizedURL } from './url-generalization.js';
-
 /// <reference path="./types.ts" />
 /// <reference path="./indexeddb-manager.ts" />
+
+// URL generalization using content script message (to avoid code duplication)
+async function backgroundGeneralizeURL(url: string, tabId?: number): Promise<string> {
+  // Fallback simple generalization for background script when content script unavailable
+  try {
+    const urlObj = new URL(url);
+    return `${urlObj.protocol}//${urlObj.hostname}/[PATH]${urlObj.search ? '?[PARAMS]' : ''}${urlObj.hash ? '#[FRAGMENT]' : ''}`;
+  } catch (e) {
+    return url;
+  }
+}
 
 // Since browser extensions with manifest v2 don't support ES modules in background scripts,
 // we'll inline all the necessary code here to avoid import statements
@@ -1076,6 +1085,11 @@ async function handleMLOperations(currentSequence: GlobalActionSequence): Promis
           if (advancedPrediction) {
             console.log(`[Synapse] Local ML prediction: ${advancedPrediction.token} (confidence: ${(advancedPrediction.confidence * 100).toFixed(1)}%)`);
             
+            // Send high confidence predictions as suggestions
+            if (advancedPrediction.confidence > 0.7) {
+              await sendPatternDetectedSuggestion(advancedPrediction);
+            }
+            
             // Store advanced prediction
             chrome.storage.session.set({ 
               lastPrediction: {
@@ -1102,6 +1116,11 @@ async function handleMLOperations(currentSequence: GlobalActionSequence): Promis
         
         if (simplePrediction) {
           console.log(`[Synapse] Simple prediction: token ${simplePrediction.tokenId} (confidence: ${(simplePrediction.confidence * 100).toFixed(1)}%)`);
+          
+          // Send high confidence predictions as suggestions
+          if (simplePrediction.confidence > 0.8) {
+            await sendPatternDetectedSuggestion(simplePrediction, 'simple');
+          }
           
           // Store simple prediction
           chrome.storage.session.set({ 
@@ -1636,7 +1655,7 @@ chrome.tabs.onCreated.addListener(async (tab) => {
   const payload: TabCreatedPayload = {
     tabId: tab.id!,
     windowId: tab.windowId,
-    url: generateGeneralizedURL(tab.pendingUrl || tab.url || ''),
+    url: await backgroundGeneralizeURL(tab.pendingUrl || tab.url || '', tab.id),
   };
   const event: BrowserActionTabCreatedEvent = {
     type: 'browser_action_tab_created',
@@ -1651,7 +1670,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   if (changeInfo.status === 'complete' && changeInfo.url) {
     const payload: TabUpdatedPayload = {
       tabId: tabId,
-      url: generateGeneralizedURL(changeInfo.url),
+      url: await backgroundGeneralizeURL(changeInfo.url, tabId),
       title: tab.title,
     };
     const event: BrowserActionTabUpdatedEvent = {
@@ -1971,3 +1990,87 @@ chrome.runtime.onInstalled.addListener(() => {
   console.log('[Synapse] Extension installed. Sequence storage initialized.');
   initializePauseState();
 });
+
+/**
+ * Sends pattern detected suggestions to content scripts
+ * Implements the prediction-to-suggestion conversion logic
+ */
+async function sendPatternDetectedSuggestion(prediction: any, type: string = 'advanced'): Promise<void> {
+  try {
+    // Get current active tab
+    const tabs = await new Promise<chrome.tabs.Tab[]>(resolve => {
+      chrome.tabs.query({ active: true, currentWindow: true }, resolve);
+    });
+    
+    if (tabs.length === 0) {
+      console.log('[Synapse] No active tab found for sending suggestion');
+      return;
+    }
+    
+    const activeTab = tabs[0];
+    
+    // Create suggestion based on prediction
+    const suggestion = {
+      id: `suggestion_${Date.now()}`,
+      title: generateSuggestionTitle(prediction, type),
+      description: generateSuggestionDescription(prediction, type),
+      confidence: prediction.confidence,
+      actionType: determineSuggestedAction(prediction, type),
+      timestamp: Date.now()
+    };
+    
+    // Send to content script
+    chrome.tabs.sendMessage(activeTab.id!, {
+      type: 'patternDetected',
+      data: suggestion
+    });
+    
+    console.log('[Synapse] Pattern detected suggestion sent:', suggestion);
+  } catch (error) {
+    console.error('[Synapse] Error sending pattern detected suggestion:', error);
+  }
+}
+
+/**
+ * Generate human-readable suggestion title
+ */
+function generateSuggestionTitle(prediction: any, type: string): string {
+  if (type === 'simple') {
+    return `Continue with action ${prediction.tokenId}`;
+  } else {
+    // Advanced prediction
+    const token = prediction.token || 'unknown';
+    return `Suggested next action: ${token}`;
+  }
+}
+
+/**
+ * Generate suggestion description
+ */
+function generateSuggestionDescription(prediction: any, type: string): string {
+  const confidence = Math.round(prediction.confidence * 100);
+  if (type === 'simple') {
+    return `Based on your recent actions, you might want to perform action ${prediction.tokenId} (${confidence}% confidence)`;
+  } else {
+    return `AI suggests: ${prediction.token} with ${confidence}% confidence`;
+  }
+}
+
+/**
+ * Determine the suggested action type
+ */
+function determineSuggestedAction(prediction: any, type: string): string {
+  if (type === 'simple') {
+    // Map tokenId to action type
+    if (prediction.tokenId < 10) return 'navigation';
+    if (prediction.tokenId < 20) return 'interaction';
+    return 'other';
+  } else {
+    // Advanced prediction - analyze token
+    const token = prediction.token || '';
+    if (token.includes('click') || token.includes('select')) return 'interaction';
+    if (token.includes('navigate') || token.includes('visit')) return 'navigation';
+    if (token.includes('form') || token.includes('input')) return 'form_filling';
+    return 'other';
+  }
+}

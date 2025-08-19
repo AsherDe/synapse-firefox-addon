@@ -1,124 +1,71 @@
 /// <reference path="./types.ts" />
 
-// URL Generalization functionality (inlined to avoid import issues)
-interface URLGeneralizationFeatures {
-  domain: string;
-  domain_hash: number;
-  page_type: string;
-  page_type_confidence: number;
-  path_depth: number;
-  path_component_types: string[];
-  path_keywords: string[];
-  query_param_count: number;
-  query_param_keys: string[];
-  query_param_key_hash: number;
-  has_fragment: boolean;
-}
-
-function simpleStringHash(str: string): number {
-  let hash = 0;
-  if (str.length === 0) return hash;
-  
-  for (let i = 0; i < str.length; i++) {
-    const char = str.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash = hash & hash; // Convert to 32-bit integer
+// URL generalization function (inlined from url-generalization.ts)
+function generateGeneralizedURL(url: string): string {
+  try {
+    const urlObj = new URL(url);
+    const pathSegments = urlObj.pathname.split('/').filter(p => p.length > 0);
+    
+    // Generalize path segments
+    const generalizedSegments = pathSegments.map(segment => {
+      // Keep common patterns but generalize specific content
+      if (/^\d+$/.test(segment)) return '[ID]';
+      if (segment.length > 15) return '[CONTENT]';
+      if (/^[a-f0-9-]{32,}$/i.test(segment)) return '[HASH]';
+      if (/^[a-f0-9-]{8,}$/i.test(segment)) return '[TOKEN]';
+      
+      // Keep common path keywords
+      const commonPaths = ['api', 'admin', 'user', 'users', 'profile', 'settings', 'search', 'login', 'logout', 'home', 'about', 'contact', 'help', 'docs', 'wiki', 'forms', 'post'];
+      if (commonPaths.includes(segment.toLowerCase())) {
+        return segment.toLowerCase();
+      }
+      
+      // For everything else, use a placeholder
+      return '[PATH]';
+    });
+    
+    // Reconstruct URL
+    let generalizedURL = `${urlObj.protocol}//${urlObj.hostname}`;
+    if (generalizedSegments.length > 0) {
+      generalizedURL += '/' + generalizedSegments.join('/');
+    }
+    
+    // Add query parameters in generalized form
+    if (urlObj.search) {
+      const paramCount = Array.from(urlObj.searchParams.keys()).length;
+      if (paramCount > 0) {
+        generalizedURL += `?[${paramCount}_PARAMS]`;
+      }
+    }
+    
+    // Add fragment indicator
+    if (urlObj.hash) {
+      generalizedURL += '#[FRAGMENT]';
+    }
+    
+    return generalizedURL;
+  } catch (e) {
+    return url; // Return original if parsing fails
   }
-  
-  return Math.abs(hash);
 }
 
-import { generateGeneralizedURL } from './url-generalization.js';
-
-// Browser API compatibility for Firefox
-declare const browser: any;
-
-const getBrowserAPI = () => {
-  try {
-    if (typeof chrome !== 'undefined' && chrome?.runtime) return chrome;
-  } catch (e) {}
-  try {
-    if (typeof browser !== 'undefined' && browser?.runtime) return browser;
-  } catch (e) {}
-  return null;
-};
+// Browser API compatibility using webextension-polyfill
+declare var browser: any; // webextension-polyfill provides this globally
 
 const sendToBackground = (message: any) => {
-  const api = getBrowserAPI();
-  if (api && api.runtime && api.runtime.sendMessage) {
+  if (browser && browser.runtime && browser.runtime.sendMessage) {
     try {
-      api.runtime.sendMessage(message);
+      browser.runtime.sendMessage(message);
+      console.log('[Synapse] Message sent successfully');
     } catch (e) {
       console.warn('[Synapse] Failed to send message:', e);
     }
+  } else {
+    console.warn('[Synapse] Browser API not available');
   }
 };
 
-class URLGeneralizationEngine {
-  static generateFeatures(url: string): URLGeneralizationFeatures {
-    try {
-      const urlObj = new URL(url);
-      
-      return {
-        domain: urlObj.hostname,
-        domain_hash: simpleStringHash(urlObj.hostname),
-        page_type: this.classifyPageType(urlObj),
-        page_type_confidence: 0.8,
-        path_depth: urlObj.pathname.split('/').filter(p => p.length > 0).length,
-        path_component_types: this.analyzePathComponents(urlObj.pathname),
-        path_keywords: this.extractPathKeywords(urlObj.pathname),
-        query_param_count: Array.from(urlObj.searchParams.keys()).length,
-        query_param_keys: Array.from(urlObj.searchParams.keys()),
-        query_param_key_hash: simpleStringHash(Array.from(urlObj.searchParams.keys()).join(',')),
-        has_fragment: urlObj.hash.length > 0
-      };
-    } catch (e) {
-      return this.getDefaultFeatures();
-    }
-  }
-  
-  private static classifyPageType(url: URL): string {
-    const path = url.pathname.toLowerCase();
-    const domain = url.hostname.toLowerCase();
-    
-    if (domain.includes('github')) return 'code_repository';
-    if (domain.includes('stackoverflow')) return 'qa_forum';
-    if (path.includes('/search')) return 'search_results';
-    if (path.includes('/login') || path.includes('/signin')) return 'authentication';
-    if (path.includes('/settings') || path.includes('/config')) return 'settings';
-    
-    return 'general';
-  }
-  
-  private static analyzePathComponents(path: string): string[] {
-    return path.split('/').filter(p => p.length > 0).map(component => {
-      if (/^\d+$/.test(component)) return 'numeric_id';
-      if (component.length > 20) return 'long_identifier';
-      return 'path_segment';
-    });
-  }
-  
-  private static extractPathKeywords(path: string): string[] {
-    const keywords = ['api', 'admin', 'user', 'profile', 'settings', 'search', 'login', 'logout'];
-    return keywords.filter(keyword => path.toLowerCase().includes(keyword));
-  }
-  
-  private static getDefaultFeatures(): URLGeneralizationFeatures {
-    return {
-      domain: 'unknown',
-      domain_hash: 0,
-      page_type: 'unknown',
-      page_type_confidence: 0,
-      path_depth: 0,
-      path_component_types: [],
-      path_keywords: [],
-      query_param_count: 0,
-      query_param_keys: [],
-      query_param_key_hash: 0,
-      has_fragment: false
-    };
-  }
-}
+// URLGeneralizationEngine is now defined in url-generalization.ts
 
 /**
  * Optimized function to generate a stable CSS selector for a given element.
@@ -276,8 +223,34 @@ function extractElementFeatures(element: HTMLElement, url: string): GeneralizedE
     features.is_password_field = false;
   }
   
-  // Use advanced URL generalization for enhanced feature extraction
-  const urlFeatures = URLGeneralizationEngine.generateFeatures(url);
+  // Use simplified feature extraction (URL generalization engine not needed for basic features)
+  const urlObj = new URL(url);
+  const urlFeatures = {
+    domain: urlObj.hostname,
+    domain_hash: simpleStringHash(urlObj.hostname),
+    page_type: inferPageType(url, element),
+    page_type_confidence: 0.8,
+    path_depth: urlObj.pathname.split('/').filter(p => p.length > 0).length,
+    path_component_types: ['unknown'],
+    path_keywords: [],
+    query_param_count: Array.from(urlObj.searchParams.keys()).length,
+    query_param_keys: Array.from(urlObj.searchParams.keys()),
+    query_param_key_hash: simpleStringHash(Array.from(urlObj.searchParams.keys()).join(',')),
+    has_fragment: urlObj.hash.length > 0
+  };
+  
+  function simpleStringHash(str: string): number {
+    let hash = 0;
+    if (str.length === 0) return hash;
+    
+    for (let i = 0; i < str.length; i++) {
+      const char = str.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash; // Convert to 32-bit integer
+    }
+    
+    return Math.abs(hash);
+  }
   
   // Map all URL generalization features to GeneralizedEventFeatures
   features.domain = urlFeatures.domain;
@@ -300,8 +273,15 @@ function extractElementFeatures(element: HTMLElement, url: string): GeneralizedE
  * This function is kept for backward compatibility and now delegates to the advanced URL generalization engine
  */
 function inferPageType(url: string, element?: HTMLElement): string {
-  const urlFeatures = URLGeneralizationEngine.generateFeatures(url);
-  return urlFeatures.page_type;
+  const path = url.toLowerCase();
+  
+  if (path.includes('github')) return 'code_repository';
+  if (path.includes('stackoverflow')) return 'qa_forum';
+  if (path.includes('/search')) return 'search_results';
+  if (path.includes('/login') || path.includes('/signin')) return 'authentication';
+  if (path.includes('/settings') || path.includes('/config')) return 'settings';
+  
+  return 'general';
 }
 
 /**
@@ -549,6 +529,7 @@ class EventThrottler {
   public throttleEvent(event: any, callback: () => void): void {
     const now = Date.now();
     const timeSinceLastEvent = now - this.lastEventTime;
+    console.log('[Synapse] EventThrottler:', event.type, 'timeSince:', timeSinceLastEvent, 'queue:', this.eventQueue.length);
 
     // If enough time has passed, send immediately
     if (timeSinceLastEvent >= this.MIN_EVENT_INTERVAL && this.eventQueue.length === 0) {
@@ -612,6 +593,7 @@ class AdvancedEventThrottler {
    * Throttle function - executes at most once per interval
    */
   public throttle(key: string, func: () => void, delay: number): void {
+    console.log('[Synapse] AdvancedThrottler throttle:', key, 'hasTimer:', this.throttleTimers.has(key));
     if (!this.throttleTimers.has(key)) {
       func();
       this.throttleTimers.set(key, window.setTimeout(() => {
@@ -700,10 +682,10 @@ function setupScrollMonitoring(): void {
           sendToBackground(message);
         });
         
-        lastScrollTop = currentScrollTop;
       } else {
         console.log('[Synapse] Scroll event skipped - conditions not met');
       }
+      lastScrollTop = currentScrollTop; // Update position regardless of whether event was sent
     }, 250); // Throttle scroll events to at most 4 times per second
   }, { passive: true });
 }
@@ -956,8 +938,7 @@ function setupFormSubmitMonitoring(): void {
     if (isSubmitButton) {
       const form = target.closest('form');
       if (form) {
-        setTimeout(() => {
-          eventThrottler.throttleEvent(event, () => {
+        eventThrottler.throttleEvent(event, () => {
             const features = extractElementFeatures(form, window.location.href);
             const inputs = form.querySelectorAll('input, textarea, select');
             const requiredFields = form.querySelectorAll('[required]');
@@ -979,7 +960,6 @@ function setupFormSubmitMonitoring(): void {
             sendToBackground(message);
             console.log('[Synapse] Form submit button clicked:', getCssSelector(form));
           });
-        }, 100); // Small delay to allow form validation
       }
     }
   }, true);
@@ -1090,14 +1070,14 @@ function setupMouseHoverMonitoring(): void {
   const hoverStartTimes = new Map<HTMLElement, number>();
   
   // Start tracking hover without throttling to ensure proper event pairing
-  document.addEventListener('mouseover', (event) => {
+  document.addEventListener('mouseenter', (event) => {
     const target = event.target as HTMLElement;
     hoverStartTimes.set(target, Date.now());
     console.log('[Synapse] Hover started:', getCssSelector(target));
   }, true);
   
-  // Track hover duration and send event on mouseout
-  document.addEventListener('mouseout', (event) => {
+  // Track hover duration and send event on mouseleave
+  document.addEventListener('mouseleave', (event) => {
     const target = event.target as HTMLElement;
     const hoverStartTime = hoverStartTimes.get(target);
     
@@ -1258,17 +1238,15 @@ let smartAssistantScript: HTMLScriptElement | null = null;
 
 function initializeSmartAssistant(): void {
   // Check if smart assistant is enabled
-  const api = getBrowserAPI();
-  if (api && api.storage) {
-    api.storage.local.get(['assistantEnabled'], (result: any) => {
+  if (browser && browser.storage) {
+    browser.storage.local.get(['assistantEnabled'], (result: any) => {
     const isEnabled = result.assistantEnabled !== false; // Default to true
     
     if (isEnabled && !smartAssistantScript) {
       // Load smart assistant script
       smartAssistantScript = document.createElement('script');
-      const api = getBrowserAPI();
-      if (api && api.runtime && api.runtime.getURL) {
-        smartAssistantScript.src = api.runtime.getURL('dist/smart-assistant.js');
+      if (browser && browser.runtime && browser.runtime.getURL) {
+        smartAssistantScript.src = browser.runtime.getURL('dist/smart-assistant.js');
       }
       smartAssistantScript.onload = () => {
         console.log('[Synapse] Smart assistant loaded');
@@ -1294,15 +1272,23 @@ function initializeSmartAssistant(): void {
   }
 }
 
-// Listen for guidance toggle messages
-const browserAPI = getBrowserAPI();
-if (browserAPI) {
-  browserAPI.runtime.onMessage.addListener((message: any, _sender: any, _sendResponse: any) => {
+// Listen for messages from background script
+if (browser && browser.runtime) {
+  browser.runtime.onMessage.addListener((message: any, _sender: any, sendResponse: any) => {
     if (message.type === 'guidanceToggled') {
       // Re-initialize smart assistant based on new setting
       setTimeout(() => {
         initializeSmartAssistant();
       }, 100);
+    } else if (message.type === 'generalizeURL') {
+      // Handle URL generalization request from background script
+      try {
+        const generalizedURL = generateGeneralizedURL(message.url);
+        sendResponse({ success: true, generalizedURL });
+      } catch (error) {
+        sendResponse({ success: false, error: String(error) });
+      }
+      return true; // Keep message channel open for async response
     }
   });
 }
