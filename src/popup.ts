@@ -349,6 +349,30 @@ class PopupController {
       case 'user_action_keydown':
         details = `Pressed <code>${event.payload.key}</code>`;
         break;
+      case 'user_action_text_input':
+        details = `Text input in <code>${event.payload.selector}</code> (${event.payload.text.length} chars)`;
+        break;
+      case 'user_action_scroll':
+        details = `Scrolled ${event.payload.features.scroll_direction} to ${event.payload.features.scroll_percentage.toFixed(1)}%`;
+        break;
+      case 'user_action_mouse_pattern':
+        details = `Mouse ${event.payload.features.pattern_type} pattern (${event.payload.trail.length} points)`;
+        break;
+      case 'user_action_form_submit':
+        details = `Submitted form <code>${event.payload.form_selector}</code>`;
+        break;
+      case 'user_action_focus_change':
+        details = `Focus ${event.payload.focus_type}: <code>${event.payload.to_selector || 'unknown'}</code>`;
+        break;
+      case 'user_action_page_visibility':
+        details = `Page visibility: ${event.payload.visibility_state}`;
+        break;
+      case 'user_action_mouse_hover':
+        details = `Hovered over <code>${event.payload.selector}</code> for ${event.payload.hover_duration}ms`;
+        break;
+      case 'user_action_clipboard':
+        details = `Clipboard ${event.payload.operation} (${event.payload.text_length} chars)`;
+        break;
       case 'browser_action_tab_activated':
         details = `Switched to tab <code>${event.payload.tabId}</code>`;
         break;
@@ -603,9 +627,9 @@ class PopupController {
       const exportData = {
         exportInfo: {
           timestamp: new Date().toISOString(),
-          version: '1.0.0',
+          version: '1.3.0',
           userAgent: navigator.userAgent,
-          description: 'Complete Synapse extension data export for debugging'
+          description: 'Complete Synapse extension data export for debugging - includes all event types including mouse patterns'
         },
         
         // Current session data
@@ -613,7 +637,23 @@ class PopupController {
         sequenceStats: {
           totalEvents: this.sequence.length,
           eventTypeDistribution: this.getEventTypeDistribution(),
-          recentActivity: this.getRecentActivity()
+          recentActivity: this.getRecentActivity(),
+          dataTypesIncluded: [
+            'user_action_click',
+            'user_action_keydown', 
+            'user_action_text_input',
+            'user_action_scroll',
+            'user_action_mouse_pattern', // Mouse movement data included
+            'user_action_form_submit',
+            'user_action_focus_change',
+            'user_action_page_visibility',
+            'user_action_mouse_hover',
+            'user_action_clipboard',
+            'browser_action_tab_created',
+            'browser_action_tab_activated',
+            'browser_action_tab_updated',
+            'browser_action_tab_removed'
+          ]
         },
 
         // Get all stored data

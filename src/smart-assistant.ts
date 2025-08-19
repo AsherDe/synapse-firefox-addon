@@ -7,6 +7,57 @@
 
 /// <reference path="./types.ts" />
 
+/**
+ * Browser API compatibility layer
+ */
+declare const browser: any;
+
+const browserAPI = (() => {
+  try {
+    if (typeof chrome !== 'undefined' && chrome?.runtime) {
+      console.log('[SmartAssistant] Using Chrome API');
+      return chrome;
+    }
+  } catch (e) {
+    console.log('[SmartAssistant] Chrome API not available:', e);
+  }
+  
+  try {
+    if (typeof browser !== 'undefined' && browser?.runtime) {
+      console.log('[SmartAssistant] Using Browser API');
+      return browser;
+    }
+  } catch (e) {
+    console.log('[SmartAssistant] Browser API not available:', e);
+  }
+  
+  console.log('[SmartAssistant] Using fallback API');
+  // Fallback for environments where neither is available
+  return {
+    runtime: {
+      sendMessage: () => Promise.resolve(),
+      onMessage: { addListener: () => {} },
+      connect: () => ({ 
+        onMessage: { addListener: () => {} }, 
+        postMessage: () => {},
+        onDisconnect: { addListener: () => {} }
+      })
+    },
+    storage: {
+      local: {
+        get: (keys: any, callback: (result: any) => void) => {
+          if (callback) callback({});
+          return Promise.resolve({});
+        },
+        set: (items: any, callback?: () => void) => {
+          if (callback) callback();
+          return Promise.resolve();
+        }
+      }
+    }
+  };
+})();
+
 interface OperationSuggestion {
   id: string;
   title: string;
@@ -22,6 +73,24 @@ interface SuggestedAction {
   target?: string;     // CSS selector or description
   value?: string;      // For text input or key
   sequence?: number;   // Action order in sequence
+  isPrivacySafe?: boolean; // Whether action involves sensitive data
+}
+
+interface AutofillSuggestion {
+  id: string;
+  value: string;
+  targets: string[];   // CSS selectors for form fields
+  description: string;
+  confidence: number;
+  isPrivacySafe: boolean; // Only for non-sensitive data
+}
+
+interface SubtleHint {
+  id: string;
+  target: string;      // CSS selector
+  type: 'glow' | 'icon' | 'pulse';
+  confidence: number;
+  description: string;
 }
 
 interface AssistantState {
@@ -31,6 +100,9 @@ interface AssistantState {
   executionState: 'idle' | 'executing' | 'completed' | 'failed';
   executedActions: SuggestedAction[];
   userFeedback: UserFeedback | null;
+  uiMode: 'high_confidence' | 'medium_confidence' | 'autofill' | 'subtle_hint'; // UI rendering mode
+  pendingAutofill: AutofillSuggestion | null;
+  subtleHints: SubtleHint[];
 }
 
 interface UserFeedback {
@@ -38,12 +110,14 @@ interface UserFeedback {
   rating?: number;     // 1-5 stars
   comment?: string;
   actualActions?: EnrichedEvent[]; // User's actual actions performed
+  confirmationRequired?: boolean;  // Whether to show confirmation dialog
+  rollbackAvailable?: boolean;     // Whether rollback is possible
 }
 
 class SmartAssistant {
   private state: AssistantState;
   private assistantElement: HTMLElement | null = null;
-  private backgroundPort: chrome.runtime.Port | null = null;
+  private backgroundPort: any | null = null;
   private observedPatterns: Map<string, OperationSuggestion> = new Map();
   private executionHistory: Array<{
     suggestion: OperationSuggestion;
@@ -58,7 +132,10 @@ class SmartAssistant {
       currentSuggestion: null,
       executionState: 'idle',
       executedActions: [],
-      userFeedback: null
+      userFeedback: null,
+      uiMode: 'high_confidence',
+      pendingAutofill: null,
+      subtleHints: []
     };
     
     this.initializeConnection();
@@ -72,9 +149,9 @@ class SmartAssistant {
    */
   private initializeConnection(): void {
     try {
-      this.backgroundPort = chrome.runtime.connect({ name: 'smart-assistant' });
+      this.backgroundPort = browserAPI.runtime.connect({ name: 'smart-assistant' });
       
-      this.backgroundPort.onMessage.addListener((message) => {
+      this.backgroundPort.onMessage.addListener((message: any) => {
         this.handleBackgroundMessage(message);
       });
       
@@ -95,7 +172,7 @@ class SmartAssistant {
    * Load assistant settings
    */
   private loadSettings(): void {
-    chrome.storage.local.get(['assistantEnabled'], (result) => {
+    browserAPI.storage.local.get(['assistantEnabled'], (result: any) => {
       if (result.assistantEnabled !== undefined) {
         this.state.isEnabled = result.assistantEnabled;
       }
@@ -106,7 +183,7 @@ class SmartAssistant {
    * Save assistant settings
    */
   private saveSettings(): void {
-    chrome.storage.local.set({ 
+    browserAPI.storage.local.set({ 
       assistantEnabled: this.state.isEnabled 
     });
   }
@@ -243,6 +320,99 @@ class SmartAssistant {
       
       .assistant-content {
         padding: 16px 20px;
+      }
+      
+      .assistant-header.high-confidence {
+        background: linear-gradient(135deg, #4caf50 0%, #45a049 100%);
+      }
+      
+      .suggestion-card.high-confidence {
+        border: 2px solid rgba(76, 175, 80, 0.5);
+        background: rgba(76, 175, 80, 0.1);
+      }
+      
+      .confidence-badge.high {
+        background: rgba(76, 175, 80, 0.3);
+        color: white;
+        font-weight: 600;
+      }
+      
+      .btn-primary.one-click {
+        background: linear-gradient(135deg, #4caf50 0%, #45a049 100%);
+        font-weight: 600;
+        transform: scale(1.05);
+        animation: pulse 2s infinite;
+      }
+      
+      @keyframes pulse {
+        0% { box-shadow: 0 0 0 0 rgba(76, 175, 80, 0.7); }
+        70% { box-shadow: 0 0 0 10px rgba(76, 175, 80, 0); }
+        100% { box-shadow: 0 0 0 0 rgba(76, 175, 80, 0); }
+      }
+      
+      .subtle-hint {
+        position: absolute;
+        z-index: 9999;
+        pointer-events: none;
+        transition: all 0.3s ease;
+      }
+      
+      .subtle-hint.glow {
+        box-shadow: 0 0 10px 3px rgba(103, 126, 234, 0.6);
+        border-radius: 4px;
+      }
+      
+      .subtle-hint.icon::after {
+        content: '✨';
+        position: absolute;
+        top: -20px;
+        right: -5px;
+        background: rgba(103, 126, 234, 0.9);
+        color: white;
+        padding: 2px 6px;
+        border-radius: 8px;
+        font-size: 12px;
+        animation: bounce 2s infinite;
+      }
+      
+      @keyframes bounce {
+        0%, 20%, 50%, 80%, 100% { transform: translateY(0); }
+        40% { transform: translateY(-5px); }
+        60% { transform: translateY(-3px); }
+      }
+      
+      .autofill-popup {
+        position: fixed;
+        background: rgba(255, 193, 7, 0.95);
+        color: #333;
+        padding: 12px 16px;
+        border-radius: 8px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+        z-index: 10001;
+        font-size: 13px;
+        max-width: 250px;
+        backdrop-filter: blur(5px);
+      }
+      
+      .autofill-buttons {
+        display: flex;
+        gap: 8px;
+        margin-top: 8px;
+      }
+      
+      .autofill-btn {
+        background: rgba(255,255,255,0.8);
+        border: none;
+        padding: 4px 8px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 11px;
+        transition: all 0.2s;
+      }
+      
+      .autofill-btn:hover {
+        background: white;
+        transform: translateY(-1px);
       }
       
       .suggestion-card {
@@ -475,7 +645,32 @@ class SmartAssistant {
       frequency: patternData.frequency || 1
     };
     
+    this.determineUIMode(suggestion);
     this.showSuggestion(suggestion);
+  }
+
+  /**
+   * Determine UI mode based on confidence level and suggestion type
+   */
+  private determineUIMode(suggestion: OperationSuggestion): void {
+    if (suggestion.confidence >= 0.7) {
+      this.state.uiMode = 'high_confidence';
+    } else if (suggestion.confidence >= 0.5) {
+      this.state.uiMode = 'medium_confidence';
+    } else if (this.isAutofillSuggestion(suggestion)) {
+      this.state.uiMode = 'autofill';
+    } else {
+      this.state.uiMode = 'subtle_hint';
+    }
+  }
+
+  /**
+   * Check if suggestion is for autofill
+   */
+  private isAutofillSuggestion(suggestion: OperationSuggestion): boolean {
+    return suggestion.actions.some(action => 
+      action.type === 'text_input' && action.isPrivacySafe
+    );
   }
 
   /**
@@ -483,11 +678,69 @@ class SmartAssistant {
    */
   private showSuggestion(suggestion: OperationSuggestion): void {
     this.state.currentSuggestion = suggestion;
-    this.state.isVisible = true;
     this.state.executionState = 'idle';
     
+    switch (this.state.uiMode) {
+      case 'high_confidence':
+        this.showHighConfidenceUI(suggestion);
+        break;
+      case 'medium_confidence':
+        this.showMediumConfidenceUI(suggestion);
+        break;
+      case 'autofill':
+        this.showAutofillUI(suggestion);
+        break;
+      case 'subtle_hint':
+        this.showSubtleHints(suggestion);
+        break;
+    }
+  }
+
+  /**
+   * Show high confidence UI (>90%) with one-click execution
+   */
+  private showHighConfidenceUI(suggestion: OperationSuggestion): void {
+    this.state.isVisible = true;
     this.renderSuggestion();
     this.showAssistant();
+  }
+
+  /**
+   * Show medium confidence UI (>70%) with subtle hints
+   */
+  private showMediumConfidenceUI(suggestion: OperationSuggestion): void {
+    // Show subtle visual cues without full popup
+    this.createSubtleHints(suggestion);
+    this.renderSubtleHints();
+  }
+
+  /**
+   * Show autofill suggestions for non-sensitive data
+   */
+  private showAutofillUI(suggestion: OperationSuggestion): void {
+    const autofillActions = suggestion.actions.filter(action => 
+      action.type === 'text_input' && action.isPrivacySafe
+    );
+    
+    if (autofillActions.length > 0) {
+      this.state.pendingAutofill = {
+        id: suggestion.id,
+        value: autofillActions[0].value || '',
+        targets: autofillActions.map(action => action.target || ''),
+        description: `Auto-fill: ${autofillActions[0].value}`,
+        confidence: suggestion.confidence,
+        isPrivacySafe: true
+      };
+      this.showAutofillPopup();
+    }
+  }
+
+  /**
+   * Show subtle hints without popup
+   */
+  private showSubtleHints(suggestion: OperationSuggestion): void {
+    this.createSubtleHints(suggestion);
+    this.renderSubtleHints();
   }
 
   /**
@@ -498,36 +751,69 @@ class SmartAssistant {
     
     const suggestion = this.state.currentSuggestion;
     
-    this.assistantElement.innerHTML = `
-      <div class="assistant-header">
-        <h3 class="assistant-title">
-          <span class="assistant-icon">🤖</span>
-          Smart Assistant
-        </h3>
-        <button class="close-btn" onclick="synapseAssistant.hideAssistant()">×</button>
-      </div>
-      <div class="assistant-content">
-        <div class="suggestion-card">
-          <div class="suggestion-title">${suggestion.title}</div>
-          <div class="suggestion-description">${suggestion.description}</div>
-          <div class="suggestion-meta">
-            <span>Learned from: ${suggestion.learnedFrom}</span>
-            <span class="confidence-badge">Confidence: ${(suggestion.confidence * 100).toFixed(0)}%</span>
-          </div>
-          <div class="action-buttons">
-            <button class="btn-primary" onclick="synapseAssistant.executeActions()">
-              Execute
-            </button>
-            <button class="btn-secondary" onclick="synapseAssistant.rejectSuggestion()">
-              Not Now
-            </button>
-          </div>
-          ${this.renderExecutionProgress()}
+    if (this.state.uiMode === 'high_confidence') {
+      this.assistantElement.innerHTML = `
+        <div class="assistant-header high-confidence">
+          <h3 class="assistant-title">
+            <span class="assistant-icon">⚡</span>
+            Quick Action
+          </h3>
+          <button class="close-btn" onclick="synapseAssistant.hideAssistant()">×</button>
         </div>
-        ${this.renderFeedbackPanel()}
-        ${this.renderRollbackPanel()}
-      </div>
-    `;
+        <div class="assistant-content">
+          <div class="suggestion-card high-confidence">
+            <div class="suggestion-title">${suggestion.title}</div>
+            <div class="suggestion-description">${suggestion.description}</div>
+            <div class="suggestion-meta">
+              <span>High confidence prediction</span>
+              <span class="confidence-badge high">${(suggestion.confidence * 100).toFixed(0)}%</span>
+            </div>
+            <div class="action-buttons">
+              <button class="btn-primary one-click" onclick="synapseAssistant.executeActionsWithConfirmation()">
+                ⚡ Execute Now
+              </button>
+              <button class="btn-secondary" onclick="synapseAssistant.rejectSuggestion()">
+                Not Now
+              </button>
+            </div>
+            ${this.renderExecutionProgress()}
+          </div>
+          ${this.renderFeedbackPanel()}
+          ${this.renderRollbackPanel()}
+        </div>
+      `;
+    } else {
+      this.assistantElement.innerHTML = `
+        <div class="assistant-header">
+          <h3 class="assistant-title">
+            <span class="assistant-icon">🤖</span>
+            Smart Assistant
+          </h3>
+          <button class="close-btn" onclick="synapseAssistant.hideAssistant()">×</button>
+        </div>
+        <div class="assistant-content">
+          <div class="suggestion-card">
+            <div class="suggestion-title">${suggestion.title}</div>
+            <div class="suggestion-description">${suggestion.description}</div>
+            <div class="suggestion-meta">
+              <span>Learned from: ${suggestion.learnedFrom}</span>
+              <span class="confidence-badge">Confidence: ${(suggestion.confidence * 100).toFixed(0)}%</span>
+            </div>
+            <div class="action-buttons">
+              <button class="btn-primary" onclick="synapseAssistant.executeActions()">
+                Execute
+              </button>
+              <button class="btn-secondary" onclick="synapseAssistant.rejectSuggestion()">
+                Not Now
+              </button>
+            </div>
+            ${this.renderExecutionProgress()}
+          </div>
+          ${this.renderFeedbackPanel()}
+          ${this.renderRollbackPanel()}
+        </div>
+      `;
+    }
   }
 
   /**
@@ -558,7 +844,7 @@ class SmartAssistant {
     
     return `
       <div class="feedback-panel">
-        <div class="feedback-title">Please rate this suggestion:</div>
+        <div class="feedback-title">How was this suggestion?</div>
         <div class="rating-stars">
           ${[1,2,3,4,5].map(rating => 
             `<span class="star" onclick="synapseAssistant.setRating(${rating})">⭐</span>`
@@ -570,8 +856,8 @@ class SmartAssistant {
           onchange="synapseAssistant.setComment(this.value)"
         ></textarea>
         <div class="action-buttons" style="margin-top: 8px;">
-          <button class="btn-primary" onclick="synapseAssistant.submitFeedback()">Submit Feedback</button>
-          <button class="btn-secondary" onclick="synapseAssistant.rollbackActions()">Rollback</button>
+          <button class="btn-primary" onclick="synapseAssistant.submitFeedback()">Confirm & Rate</button>
+          <button class="btn-secondary" onclick="synapseAssistant.rollbackActions()">Undo & Improve</button>
         </div>
       </div>
     `;
@@ -622,6 +908,21 @@ class SmartAssistant {
   }
 
   /**
+   * Execute suggested actions with confirmation for high confidence
+   */
+  public async executeActionsWithConfirmation(): Promise<void> {
+    if (!this.state.currentSuggestion) return;
+    
+    // For high confidence, execute immediately with feedback collection
+    await this.executeActions();
+    
+    // Automatically show feedback collection after execution
+    if (this.state.executionState === 'completed') {
+      this.collectFeedbackAfterExecution();
+    }
+  }
+
+  /**
    * Execute suggested actions
    */
   public async executeActions(): Promise<void> {
@@ -661,6 +962,25 @@ class SmartAssistant {
       this.state.executionState = 'failed';
       this.renderSuggestion();
     }
+  }
+
+  /**
+   * Collect feedback after execution
+   */
+  private collectFeedbackAfterExecution(): void {
+    // For high confidence suggestions, proactively show rating
+    setTimeout(() => {
+      if (this.state.executionState === 'completed') {
+        this.showFeedbackDialog();
+      }
+    }, 1000);
+  }
+
+  /**
+   * Show feedback dialog
+   */
+  private showFeedbackDialog(): void {
+    this.renderSuggestion(); // Re-render to show feedback panel
   }
 
   /**
@@ -719,6 +1039,9 @@ class SmartAssistant {
    */
   public rejectSuggestion(): void {
     if (this.state.currentSuggestion) {
+      // Collect rejection feedback
+      this.collectRejectionFeedback();
+      
       this.backgroundPort?.postMessage({
         type: 'suggestionRejected',
         data: {
@@ -731,17 +1054,277 @@ class SmartAssistant {
   }
 
   /**
-   * Rollback executed actions and learn from differences
+   * Collect rejection feedback
+   */
+  private collectRejectionFeedback(): void {
+    if (!this.state.userFeedback) {
+      this.state.userFeedback = { type: 'reject' };
+    }
+    this.state.userFeedback.type = 'reject';
+    
+    // Briefly show why they rejected (optional quick feedback)
+    const reason = prompt('Quick feedback: Why didn\'t this suggestion help? (optional)');
+    if (reason) {
+      this.state.userFeedback.comment = reason;
+      this.backgroundPort?.postMessage({
+        type: 'feedbackSubmitted',
+        data: {
+          suggestion: this.state.currentSuggestion,
+          feedback: this.state.userFeedback,
+          timestamp: Date.now()
+        }
+      });
+    }
+  }
+
+
+  /**
+   * Update learned patterns
+   */
+  private updateLearnedPatterns(skills: ActionSkill[]): void {
+    console.log('[SmartAssistant] Updated learned patterns:', skills);
+    // TODO: Handle skill update logic
+  }
+
+  /**
+   * Handle suggestion result
+   */
+  private onSuggestionResult(result: any): void {
+    console.log('[SmartAssistant] Suggestion result:', result);
+    // TODO: Handle suggestion execution result
+  }
+
+  /**
+   * Create subtle hints for medium confidence suggestions
+   */
+  private createSubtleHints(suggestion: OperationSuggestion): void {
+    this.state.subtleHints = [];
+    
+    suggestion.actions.forEach((action, index) => {
+      if (action.target) {
+        const hint: SubtleHint = {
+          id: `hint_${suggestion.id}_${index}`,
+          target: action.target,
+          type: suggestion.confidence > 0.8 ? 'glow' : 'icon',
+          confidence: suggestion.confidence,
+          description: suggestion.description
+        };
+        this.state.subtleHints.push(hint);
+      }
+    });
+  }
+
+  /**
+   * Render subtle hints on page elements
+   */
+  private renderSubtleHints(): void {
+    this.clearSubtleHints();
+    
+    this.state.subtleHints.forEach(hint => {
+      const targetElement = document.querySelector(hint.target) as HTMLElement;
+      if (targetElement) {
+        const hintElement = document.createElement('div');
+        hintElement.className = `subtle-hint ${hint.type}`;
+        hintElement.id = `synapse-hint-${hint.id}`;
+        hintElement.title = hint.description;
+        
+        // Position hint overlay
+        const rect = targetElement.getBoundingClientRect();
+        hintElement.style.position = 'fixed';
+        hintElement.style.top = `${rect.top}px`;
+        hintElement.style.left = `${rect.left}px`;
+        hintElement.style.width = `${rect.width}px`;
+        hintElement.style.height = `${rect.height}px`;
+        
+        // Add click handler to execute action
+        hintElement.addEventListener('click', () => {
+          this.executeHintAction(hint);
+        });
+        
+        document.body.appendChild(hintElement);
+      }
+    });
+  }
+
+  /**
+   * Clear all subtle hints
+   */
+  private clearSubtleHints(): void {
+    const existingHints = document.querySelectorAll('.subtle-hint');
+    existingHints.forEach(hint => hint.remove());
+  }
+
+  /**
+   * Execute action from hint click
+   */
+  private executeHintAction(hint: SubtleHint): void {
+    const targetElement = document.querySelector(hint.target) as HTMLElement;
+    if (targetElement) {
+      targetElement.click();
+      this.clearSubtleHints();
+      
+      // Record hint interaction
+      this.backgroundPort?.postMessage({
+        type: 'hintInteraction',
+        data: {
+          hintId: hint.id,
+          executed: true,
+          timestamp: Date.now()
+        }
+      });
+    }
+  }
+
+  /**
+   * Show autofill popup
+   */
+  private showAutofillPopup(): void {
+    if (!this.state.pendingAutofill) return;
+    
+    const autofill = this.state.pendingAutofill;
+    const firstTarget = document.querySelector(autofill.targets[0]) as HTMLElement;
+    
+    if (firstTarget) {
+      const popup = document.createElement('div');
+      popup.className = 'autofill-popup';
+      popup.id = 'synapse-autofill-popup';
+      
+      const rect = firstTarget.getBoundingClientRect();
+      popup.style.position = 'fixed';
+      popup.style.top = `${rect.bottom + 5}px`;
+      popup.style.left = `${rect.left}px`;
+      
+      popup.innerHTML = `
+        <div><strong>Auto-fill suggestion:</strong></div>
+        <div style="margin: 4px 0; font-weight: 500;">${autofill.value}</div>
+        <div class="autofill-buttons">
+          <button class="autofill-btn" onclick="synapseAssistant.executeAutofill()">Fill All</button>
+          <button class="autofill-btn" onclick="synapseAssistant.dismissAutofill()">Dismiss</button>
+        </div>
+      `;
+      
+      document.body.appendChild(popup);
+      
+      // Auto-dismiss after 10 seconds
+      setTimeout(() => {
+        this.dismissAutofill();
+      }, 10000);
+    }
+  }
+
+  /**
+   * Execute autofill
+   */
+  public executeAutofill(): void {
+    if (!this.state.pendingAutofill) return;
+    
+    const autofill = this.state.pendingAutofill;
+    autofill.targets.forEach(target => {
+      const element = document.querySelector(target) as HTMLInputElement;
+      if (element && element.type !== 'password') { // Safety check
+        element.value = autofill.value;
+        element.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+    });
+    
+    // Record autofill usage
+    this.backgroundPort?.postMessage({
+      type: 'autofillExecuted',
+      data: {
+        autofill: autofill,
+        timestamp: Date.now()
+      }
+    });
+    
+    this.dismissAutofill();
+  }
+
+  /**
+   * Dismiss autofill popup
+   */
+  public dismissAutofill(): void {
+    const popup = document.getElementById('synapse-autofill-popup');
+    if (popup) {
+      popup.remove();
+    }
+    this.state.pendingAutofill = null;
+  }
+
+  /**
+   * Submit feedback with enhanced collection
+   */
+  public submitFeedback(): void {
+    if (this.state.userFeedback && this.state.currentSuggestion) {
+      // Enhanced feedback collection
+      const enhancedFeedback = {
+        ...this.state.userFeedback,
+        suggestionId: this.state.currentSuggestion.id,
+        uiMode: this.state.uiMode,
+        executionSuccess: this.state.executionState === 'completed',
+        timestamp: Date.now()
+      };
+      
+      this.backgroundPort?.postMessage({
+        type: 'feedbackSubmitted',
+        data: {
+          suggestion: this.state.currentSuggestion,
+          feedback: enhancedFeedback,
+          executedActions: this.state.executedActions,
+          timestamp: Date.now()
+        }
+      });
+      
+      // Show thank you message
+      this.showThankYouMessage();
+    }
+    
+    // Hide assistant after brief delay
+    setTimeout(() => {
+      this.hideAssistant();
+    }, 2000);
+  }
+
+  /**
+   * Show thank you message after feedback
+   */
+  private showThankYouMessage(): void {
+    if (this.assistantElement) {
+      this.assistantElement.innerHTML = `
+        <div class="assistant-header">
+          <h3 class="assistant-title">
+            <span class="assistant-icon">❤️</span>
+            Thank You!
+          </h3>
+        </div>
+        <div class="assistant-content">
+          <div class="suggestion-card" style="text-align: center; padding: 20px;">
+            <div style="font-size: 16px; margin-bottom: 8px;">Thanks for your feedback!</div>
+            <div style="font-size: 13px; opacity: 0.8;">Your input helps me learn and improve.</div>
+          </div>
+        </div>
+      `;
+    }
+  }
+
+  /**
+   * Enhanced rollback with learning
    */
   public async rollbackActions(): Promise<void> {
     if (!this.state.executedActions.length) return;
     
     try {
+      // Show rollback confirmation
+      const confirmed = confirm('This will undo the actions and help me learn from your preferences. Continue?');
+      if (!confirmed) return;
+      
       // Attempt to rollback actions in reverse order
       for (let i = this.state.executedActions.length - 1; i >= 0; i--) {
         const action = this.state.executedActions[i];
         await this.rollbackAction(action);
       }
+      
+      // Collect feedback about why rollback was needed
+      this.collectRollbackFeedback();
       
       // Start monitoring user's actual actions for learning
       this.startLearningMode();
@@ -799,67 +1382,17 @@ class SmartAssistant {
   }
 
   /**
-   * Set rating
+   * Collect rollback feedback
    */
-  public setRating(rating: number): void {
-    if (!this.state.userFeedback) {
-      this.state.userFeedback = { type: 'accept' };
-    }
-    this.state.userFeedback.rating = rating;
-    
-    // Update star display
-    const stars = document.querySelectorAll('.star');
-    stars.forEach((star, index) => {
-      if (index < rating) {
-        star.classList.add('active');
-      } else {
-        star.classList.remove('active');
+  private collectRollbackFeedback(): void {
+    const reason = prompt('What went wrong with the suggestion? This helps me improve:');
+    if (reason) {
+      if (!this.state.userFeedback) {
+        this.state.userFeedback = { type: 'reject' };
       }
-    });
-  }
-
-  /**
-   * Set comment
-   */
-  public setComment(comment: string): void {
-    if (!this.state.userFeedback) {
-      this.state.userFeedback = { type: 'accept' };
+      this.state.userFeedback.comment = `Rollback reason: ${reason}`;
+      this.state.userFeedback.rating = 1; // Low rating for rollback
     }
-    this.state.userFeedback.comment = comment;
-  }
-
-  /**
-   * Submit feedback
-   */
-  public submitFeedback(): void {
-    if (this.state.userFeedback && this.state.currentSuggestion) {
-      this.backgroundPort?.postMessage({
-        type: 'feedbackSubmitted',
-        data: {
-          suggestion: this.state.currentSuggestion,
-          feedback: this.state.userFeedback,
-          executedActions: this.state.executedActions,
-          timestamp: Date.now()
-        }
-      });
-    }
-    this.hideAssistant();
-  }
-
-  /**
-   * Update learned patterns
-   */
-  private updateLearnedPatterns(skills: ActionSkill[]): void {
-    console.log('[SmartAssistant] Updated learned patterns:', skills);
-    // TODO: Handle skill update logic
-  }
-
-  /**
-   * Handle suggestion result
-   */
-  private onSuggestionResult(result: any): void {
-    console.log('[SmartAssistant] Suggestion result:', result);
-    // TODO: Handle suggestion execution result
   }
 
   /**

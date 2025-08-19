@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+import { generateGeneralizedURL } from './url-generalization.js';
+
 /// <reference path="./types.ts" />
 /// <reference path="./indexeddb-manager.ts" />
 
@@ -1634,7 +1636,7 @@ chrome.tabs.onCreated.addListener(async (tab) => {
   const payload: TabCreatedPayload = {
     tabId: tab.id!,
     windowId: tab.windowId,
-    url: tab.pendingUrl || tab.url,
+    url: generateGeneralizedURL(tab.pendingUrl || tab.url || ''),
   };
   const event: BrowserActionTabCreatedEvent = {
     type: 'browser_action_tab_created',
@@ -1649,7 +1651,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   if (changeInfo.status === 'complete' && changeInfo.url) {
     const payload: TabUpdatedPayload = {
       tabId: tabId,
-      url: changeInfo.url,
+      url: generateGeneralizedURL(changeInfo.url),
       title: tab.title,
     };
     const event: BrowserActionTabUpdatedEvent = {

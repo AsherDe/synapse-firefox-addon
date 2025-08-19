@@ -1,5 +1,124 @@
 /// <reference path="./types.ts" />
-import { URLGeneralizationEngine, URLGeneralizationFeatures } from './url-generalization';
+
+// URL Generalization functionality (inlined to avoid import issues)
+interface URLGeneralizationFeatures {
+  domain: string;
+  domain_hash: number;
+  page_type: string;
+  page_type_confidence: number;
+  path_depth: number;
+  path_component_types: string[];
+  path_keywords: string[];
+  query_param_count: number;
+  query_param_keys: string[];
+  query_param_key_hash: number;
+  has_fragment: boolean;
+}
+
+function simpleStringHash(str: string): number {
+  let hash = 0;
+  if (str.length === 0) return hash;
+  
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash; // Convert to 32-bit integer
+  }
+  
+  return Math.abs(hash);
+}
+
+import { generateGeneralizedURL } from './url-generalization.js';
+
+// Browser API compatibility for Firefox
+declare const browser: any;
+
+const getBrowserAPI = () => {
+  try {
+    if (typeof chrome !== 'undefined' && chrome?.runtime) return chrome;
+  } catch (e) {}
+  try {
+    if (typeof browser !== 'undefined' && browser?.runtime) return browser;
+  } catch (e) {}
+  return null;
+};
+
+const sendToBackground = (message: any) => {
+  const api = getBrowserAPI();
+  if (api && api.runtime && api.runtime.sendMessage) {
+    try {
+      api.runtime.sendMessage(message);
+    } catch (e) {
+      console.warn('[Synapse] Failed to send message:', e);
+    }
+  }
+};
+
+class URLGeneralizationEngine {
+  static generateFeatures(url: string): URLGeneralizationFeatures {
+    try {
+      const urlObj = new URL(url);
+      
+      return {
+        domain: urlObj.hostname,
+        domain_hash: simpleStringHash(urlObj.hostname),
+        page_type: this.classifyPageType(urlObj),
+        page_type_confidence: 0.8,
+        path_depth: urlObj.pathname.split('/').filter(p => p.length > 0).length,
+        path_component_types: this.analyzePathComponents(urlObj.pathname),
+        path_keywords: this.extractPathKeywords(urlObj.pathname),
+        query_param_count: Array.from(urlObj.searchParams.keys()).length,
+        query_param_keys: Array.from(urlObj.searchParams.keys()),
+        query_param_key_hash: simpleStringHash(Array.from(urlObj.searchParams.keys()).join(',')),
+        has_fragment: urlObj.hash.length > 0
+      };
+    } catch (e) {
+      return this.getDefaultFeatures();
+    }
+  }
+  
+  private static classifyPageType(url: URL): string {
+    const path = url.pathname.toLowerCase();
+    const domain = url.hostname.toLowerCase();
+    
+    if (domain.includes('github')) return 'code_repository';
+    if (domain.includes('stackoverflow')) return 'qa_forum';
+    if (path.includes('/search')) return 'search_results';
+    if (path.includes('/login') || path.includes('/signin')) return 'authentication';
+    if (path.includes('/settings') || path.includes('/config')) return 'settings';
+    
+    return 'general';
+  }
+  
+  private static analyzePathComponents(path: string): string[] {
+    return path.split('/').filter(p => p.length > 0).map(component => {
+      if (/^\d+$/.test(component)) return 'numeric_id';
+      if (component.length > 20) return 'long_identifier';
+      return 'path_segment';
+    });
+  }
+  
+  private static extractPathKeywords(path: string): string[] {
+    const keywords = ['api', 'admin', 'user', 'profile', 'settings', 'search', 'login', 'logout'];
+    return keywords.filter(keyword => path.toLowerCase().includes(keyword));
+  }
+  
+  private static getDefaultFeatures(): URLGeneralizationFeatures {
+    return {
+      domain: 'unknown',
+      domain_hash: 0,
+      page_type: 'unknown',
+      page_type_confidence: 0,
+      path_depth: 0,
+      path_component_types: [],
+      path_keywords: [],
+      query_param_count: 0,
+      query_param_keys: [],
+      query_param_key_hash: 0,
+      has_fragment: false
+    };
+  }
+}
 
 /**
  * Optimized function to generate a stable CSS selector for a given element.
@@ -82,7 +201,7 @@ function getCssSelector(el: HTMLElement): string {
 }
 
 // Initialize the URL generalization engine
-const urlGeneralizationEngine = new URLGeneralizationEngine();
+// URL generalization engine now uses static methods
 
 /**
  * Extract generalized features from DOM elements
@@ -158,7 +277,7 @@ function extractElementFeatures(element: HTMLElement, url: string): GeneralizedE
   }
   
   // Use advanced URL generalization for enhanced feature extraction
-  const urlFeatures = urlGeneralizationEngine.generalizeURL(url, element);
+  const urlFeatures = URLGeneralizationEngine.generateFeatures(url);
   
   // Map all URL generalization features to GeneralizedEventFeatures
   features.domain = urlFeatures.domain;
@@ -181,7 +300,7 @@ function extractElementFeatures(element: HTMLElement, url: string): GeneralizedE
  * This function is kept for backward compatibility and now delegates to the advanced URL generalization engine
  */
 function inferPageType(url: string, element?: HTMLElement): string {
-  const urlFeatures = urlGeneralizationEngine.generalizeURL(url, element);
+  const urlFeatures = URLGeneralizationEngine.generateFeatures(url);
   return urlFeatures.page_type;
 }
 
@@ -348,7 +467,7 @@ class TextInputAggregator {
     const textInputPayload: UserActionTextInputPayload = {
       text: '', // Never record actual text content for privacy
       selector: getCssSelector(this.activeInput),
-      url: window.location.href,
+      url: generateGeneralizedURL(window.location.href),
       input_method: this.detectInputMethod(),
       features: {
         ...features,
@@ -362,7 +481,7 @@ class TextInputAggregator {
       payload: textInputPayload,
     };
 
-    chrome.runtime.sendMessage(message);
+    sendToBackground(message);
     
     console.log('[Synapse] Text input finalized:', {
       textLength: this.inputBuffer.trim().length, // Only log length, not content
@@ -424,8 +543,8 @@ class EventThrottler {
   private lastEventTime: number = 0;
   private eventQueue: Array<{event: any, callback: () => void}> = [];
   private throttleTimer: number | null = null;
-  private readonly MIN_EVENT_INTERVAL = 50; // 50ms minimum between events
-  private readonly MAX_QUEUE_SIZE = 20;
+  private readonly MIN_EVENT_INTERVAL = 20; // 20ms minimum between events
+  private readonly MAX_QUEUE_SIZE = 30;
 
   public throttleEvent(event: any, callback: () => void): void {
     const now = Date.now();
@@ -539,12 +658,19 @@ function setupScrollMonitoring(): void {
   let scrollDirection = 'none';
   
   document.addEventListener('scroll', (event) => {
+    const currentScrollTop = window.pageYOffset || document.documentElement.scrollTop;
+    const scrollDistance = Math.abs(currentScrollTop - lastScrollTop);
+    console.log('[Synapse] Scroll detected:', currentScrollTop, 'distance:', scrollDistance);
+    
     advancedThrottler.throttle('scroll', () => {
-      const currentScrollTop = window.pageYOffset || document.documentElement.scrollTop;
       const newDirection = currentScrollTop > lastScrollTop ? 'down' : 'up';
       
-      // Only send events when scroll direction changes or significant scroll distance
-      if (newDirection !== scrollDirection || Math.abs(currentScrollTop - lastScrollTop) > 200) {
+      console.log('[Synapse] Scroll throttle check:', 
+                  'direction:', newDirection, 'vs', scrollDirection,
+                  'distance:', Math.abs(currentScrollTop - lastScrollTop), '> 20?');
+      
+      // Only send events when scroll direction changes or significant scroll distance (降低门槛)
+      if (newDirection !== scrollDirection || Math.abs(currentScrollTop - lastScrollTop) > 20) {
         scrollDirection = newDirection;
         
         const features = {
@@ -557,22 +683,26 @@ function setupScrollMonitoring(): void {
           page_type: inferPageType(window.location.href)
         };
         
+        console.log('[Synapse] Scroll event will be sent:', features);
+        
         // Send scroll event to background (less frequently than other events)
         eventThrottler.throttleEvent(event, () => {
           const message = {
             type: 'user_action_scroll',
             payload: {
-              url: window.location.href,
+              url: generateGeneralizedURL(window.location.href),
               features: features,
               timestamp: Date.now()
             }
           };
           
-          // Only send if this is a significant scroll action
-          chrome.runtime.sendMessage(message);
+          console.log('[Synapse] Scroll event sent:', message);
+          sendToBackground(message);
         });
         
         lastScrollTop = currentScrollTop;
+      } else {
+        console.log('[Synapse] Scroll event skipped - conditions not met');
       }
     }, 250); // Throttle scroll events to at most 4 times per second
   }, { passive: true });
@@ -583,7 +713,7 @@ function setupScrollMonitoring(): void {
  */
 function setupMouseMoveMonitoring(): void {
   let mouseTrail: {x: number, y: number, timestamp: number}[] = [];
-  const maxTrailLength = 5;
+  const maxTrailLength = 8;
   
   document.addEventListener('mousemove', (event) => {
     // Use debounce to only process mouse movement after user stops moving for a moment
@@ -604,8 +734,8 @@ function setupMouseMoveMonitoring(): void {
       if (mouseTrail.length >= 3) {
         const pattern = analyzeMousePattern(mouseTrail);
         
-        // Only send meaningful mouse patterns (降低门槛以收集更多数据用于研究)
-        if (pattern.significance > 0.1) {
+        // Only send meaningful mouse patterns (进一步降低门槛以收集更多数据用于研究)
+        if (pattern.significance > 0.02) {
           const features = {
             pattern_type: pattern.type,
             movement_speed: pattern.speed,
@@ -619,18 +749,18 @@ function setupMouseMoveMonitoring(): void {
           const message = {
             type: 'user_action_mouse_pattern',
             payload: {
-              url: window.location.href,
+              url: generateGeneralizedURL(window.location.href),
               features: features,
               trail: mouseTrail.slice(), // Copy of trail
               timestamp: Date.now()
             }
           };
           
-          chrome.runtime.sendMessage(message);
+          sendToBackground(message);
           mouseTrail = []; // Reset trail after sending
         }
       }
-    }, 100); // Debounce mouse movement analysis - 降低延迟以收集更多轨迹
+    }, 30); // Debounce mouse movement analysis - 进一步降低延迟以收集更多轨迹
   }, { passive: true });
 }
 
@@ -675,7 +805,7 @@ function analyzeMousePattern(trail: {x: number, y: number, timestamp: number}[])
   
   // Calculate significance (how noteworthy this pattern is) - 调整公式以更容易收集数据
   const significance = Math.min(1, 
-    (totalDistance / 50) * 0.5 + // 距离因子，降低门槛
+    (totalDistance / 30) * 0.5 + // 距离因子，降低门槛
     (directionChanges / 2) * 0.3 + // 方向变化因子
     Math.min(speed * 2, 1) * 0.2 // 速度因子
   );
@@ -718,7 +848,7 @@ document.addEventListener('click', (event: MouseEvent) => {
       selector: getCssSelector(element),
       x: event.clientX,
       y: event.clientY,
-      url: window.location.href,
+      url: generateGeneralizedURL(window.location.href),
       features: features
     };
 
@@ -727,7 +857,7 @@ document.addEventListener('click', (event: MouseEvent) => {
       payload: clickPayload,
     };
 
-    chrome.runtime.sendMessage(message);
+    sendToBackground(message);
   });
 }, true); // Use capture phase to ensure all clicks are caught
 
@@ -766,7 +896,7 @@ document.addEventListener('keydown', (event: KeyboardEvent) => {
     const keydownPayload: ExtendedUserActionKeydownPayload = {
       key: event.key,
       code: event.code,
-      url: window.location.href,
+      url: generateGeneralizedURL(window.location.href),
       features: features,
       modifier_keys: modifierKeys
     };
@@ -776,7 +906,7 @@ document.addEventListener('keydown', (event: KeyboardEvent) => {
       payload: keydownPayload,
     };
 
-    chrome.runtime.sendMessage(message);
+    sendToBackground(message);
   });
 }, true); // Use capture phase
 
@@ -785,6 +915,7 @@ document.addEventListener('keydown', (event: KeyboardEvent) => {
  * 标记一个小型任务的完成
  */
 function setupFormSubmitMonitoring(): void {
+  // Standard form submit event
   document.addEventListener('submit', (event) => {
     const form = event.target as HTMLFormElement;
     
@@ -797,7 +928,7 @@ function setupFormSubmitMonitoring(): void {
       
       const formSubmitPayload: UserActionFormSubmitPayload = {
         form_selector: getCssSelector(form),
-        url: window.location.href,
+        url: generateGeneralizedURL(window.location.href),
         features: features,
         field_count: inputs.length,
         has_required_fields: requiredFields.length > 0,
@@ -809,9 +940,48 @@ function setupFormSubmitMonitoring(): void {
         payload: formSubmitPayload,
       };
 
-      chrome.runtime.sendMessage(message);
+      sendToBackground(message);
       console.log('[Synapse] Form submitted:', getCssSelector(form));
     });
+  }, true);
+
+  // Also monitor submit button clicks as fallback
+  document.addEventListener('click', (event) => {
+    const target = event.target as HTMLElement;
+    const isSubmitButton = (target as HTMLInputElement).type === 'submit' || 
+                          target.getAttribute('type') === 'submit' ||
+                          target.textContent?.toLowerCase().includes('submit') ||
+                          target.textContent?.toLowerCase().includes('送信');
+    
+    if (isSubmitButton) {
+      const form = target.closest('form');
+      if (form) {
+        setTimeout(() => {
+          eventThrottler.throttleEvent(event, () => {
+            const features = extractElementFeatures(form, window.location.href);
+            const inputs = form.querySelectorAll('input, textarea, select');
+            const requiredFields = form.querySelectorAll('[required]');
+            
+            const formSubmitPayload: UserActionFormSubmitPayload = {
+              form_selector: getCssSelector(form),
+              url: generateGeneralizedURL(window.location.href),
+              features: features,
+              field_count: inputs.length,
+              has_required_fields: requiredFields.length > 0,
+              submit_method: form.method || 'GET'
+            };
+
+            const message: RawUserAction = {
+              type: 'user_action_form_submit',
+              payload: formSubmitPayload,
+            };
+
+            sendToBackground(message);
+            console.log('[Synapse] Form submit button clicked:', getCssSelector(form));
+          });
+        }, 100); // Small delay to allow form validation
+      }
+    }
   }, true);
 }
 
@@ -825,6 +995,7 @@ function setupFocusChangeMonitoring(): void {
   // Focus gained
   document.addEventListener('focusin', (event) => {
     const target = event.target as HTMLElement;
+    console.log('[Synapse] Focus gained:', getCssSelector(target));
     
     eventThrottler.throttleEvent(event, () => {
       const features = extractElementFeatures(target, window.location.href);
@@ -832,7 +1003,7 @@ function setupFocusChangeMonitoring(): void {
       const focusChangePayload: UserActionFocusChangePayload = {
         from_selector: lastFocusedElement ? getCssSelector(lastFocusedElement) : undefined,
         to_selector: getCssSelector(target),
-        url: window.location.href,
+        url: generateGeneralizedURL(window.location.href),
         features: features,
         focus_type: lastFocusedElement ? 'switched' : 'gained'
       };
@@ -842,7 +1013,8 @@ function setupFocusChangeMonitoring(): void {
         payload: focusChangePayload,
       };
 
-      chrome.runtime.sendMessage(message);
+      sendToBackground(message);
+      console.log('[Synapse] Focus change event sent:', focusChangePayload.focus_type, 'to', getCssSelector(target));
       lastFocusedElement = target;
     });
   }, true);
@@ -857,7 +1029,7 @@ function setupFocusChangeMonitoring(): void {
       const focusChangePayload: UserActionFocusChangePayload = {
         from_selector: getCssSelector(target),
         to_selector: undefined,
-        url: window.location.href,
+        url: generateGeneralizedURL(window.location.href),
         features: features,
         focus_type: 'lost'
       };
@@ -867,7 +1039,7 @@ function setupFocusChangeMonitoring(): void {
         payload: focusChangePayload,
       };
 
-      chrome.runtime.sendMessage(message);
+      sendToBackground(message);
       lastFocusedElement = null;
     });
   }, true);
@@ -892,7 +1064,7 @@ function setupPageVisibilityMonitoring(): void {
     };
     
     const visibilityPayload: UserActionPageVisibilityPayload = {
-      url: window.location.href,
+      url: generateGeneralizedURL(window.location.href),
       visibility_state: currentState as 'visible' | 'hidden',
       previous_state: lastVisibilityState,
       features: features
@@ -903,7 +1075,7 @@ function setupPageVisibilityMonitoring(): void {
       payload: visibilityPayload,
     };
 
-    chrome.runtime.sendMessage(message);
+    sendToBackground(message);
     console.log('[Synapse] Page visibility changed:', currentState, 'time on page:', timeOnPage);
     
     lastVisibilityState = currentState;
@@ -917,33 +1089,14 @@ function setupPageVisibilityMonitoring(): void {
 function setupMouseHoverMonitoring(): void {
   const hoverStartTimes = new Map<HTMLElement, number>();
   
+  // Start tracking hover without throttling to ensure proper event pairing
   document.addEventListener('mouseover', (event) => {
     const target = event.target as HTMLElement;
-    
-    // Use throttling to prevent excessive hover events
-    advancedThrottler.throttle('mouseover', () => {
-      hoverStartTimes.set(target, Date.now());
-      
-      const features = extractElementFeatures(target, window.location.href);
-      
-      const hoverPayload: UserActionMouseHoverPayload = {
-        selector: getCssSelector(target),
-        url: window.location.href,
-        features: features,
-        x: event.clientX,
-        y: event.clientY
-      };
-
-      const message: RawUserAction = {
-        type: 'user_action_mouse_hover',
-        payload: hoverPayload,
-      };
-
-      chrome.runtime.sendMessage(message);
-    }, 100); // Throttle to once per 100ms
+    hoverStartTimes.set(target, Date.now());
+    console.log('[Synapse] Hover started:', getCssSelector(target));
   }, true);
   
-  // Track hover duration
+  // Track hover duration and send event on mouseout
   document.addEventListener('mouseout', (event) => {
     const target = event.target as HTMLElement;
     const hoverStartTime = hoverStartTimes.get(target);
@@ -952,13 +1105,15 @@ function setupMouseHoverMonitoring(): void {
       const hoverDuration = Date.now() - hoverStartTime;
       hoverStartTimes.delete(target);
       
-      // Only report significant hovers (>200ms)
-      if (hoverDuration > 200) {
+      console.log('[Synapse] Hover ended:', getCssSelector(target), 'duration:', hoverDuration);
+      
+      // Only report significant hovers (>100ms)
+      if (hoverDuration > 100) {
         const features = extractElementFeatures(target, window.location.href);
         
         const hoverPayload: UserActionMouseHoverPayload = {
           selector: getCssSelector(target),
-          url: window.location.href,
+          url: generateGeneralizedURL(window.location.href),
           features: features,
           hover_duration: hoverDuration,
           x: event.clientX,
@@ -970,9 +1125,13 @@ function setupMouseHoverMonitoring(): void {
           payload: hoverPayload,
         };
 
-        chrome.runtime.sendMessage(message);
-        console.log('[Synapse] Significant hover:', getCssSelector(target), 'duration:', hoverDuration);
+        sendToBackground(message);
+        console.log('[Synapse] Significant hover reported:', getCssSelector(target), 'duration:', hoverDuration);
+      } else {
+        console.log('[Synapse] Hover too short, not reported:', hoverDuration + 'ms');
       }
+    } else {
+      console.log('[Synapse] No start time found for mouseout on:', getCssSelector(target));
     }
   }, true);
 }
@@ -993,7 +1152,7 @@ function setupClipboardMonitoring(): void {
       
       const clipboardPayload: UserActionClipboardPayload = {
         operation: 'copy',
-        url: window.location.href,
+        url: generateGeneralizedURL(window.location.href),
         features: features,
         text_length: selection ? selection.toString().length : 0,
         has_formatting: hasFormatting || false
@@ -1004,7 +1163,7 @@ function setupClipboardMonitoring(): void {
         payload: clipboardPayload,
       };
 
-      chrome.runtime.sendMessage(message);
+      sendToBackground(message);
       console.log('[Synapse] Copy operation detected');
     });
   }, true);
@@ -1019,7 +1178,7 @@ function setupClipboardMonitoring(): void {
       
       const clipboardPayload: UserActionClipboardPayload = {
         operation: 'cut',
-        url: window.location.href,
+        url: generateGeneralizedURL(window.location.href),
         features: features,
         text_length: selection ? selection.toString().length : 0,
         has_formatting: false
@@ -1030,7 +1189,7 @@ function setupClipboardMonitoring(): void {
         payload: clipboardPayload,
       };
 
-      chrome.runtime.sendMessage(message);
+      sendToBackground(message);
       console.log('[Synapse] Cut operation detected');
     });
   }, true);
@@ -1047,7 +1206,7 @@ function setupClipboardMonitoring(): void {
       
       const clipboardPayload: UserActionClipboardPayload = {
         operation: 'paste',
-        url: window.location.href,
+        url: generateGeneralizedURL(window.location.href),
         features: features,
         text_length: pastedText.length,
         has_formatting: hasFormatting
@@ -1058,7 +1217,7 @@ function setupClipboardMonitoring(): void {
         payload: clipboardPayload,
       };
 
-      chrome.runtime.sendMessage(message);
+      sendToBackground(message);
       console.log('[Synapse] Paste operation detected');
     });
   }, true);
@@ -1084,18 +1243,33 @@ function initializeAllEventMonitoring(): void {
 // Initialize all event monitoring
 initializeAllEventMonitoring();
 
+// Add debug logging for missing events
+console.log('[Synapse] All event monitoring initialized. Expected events:');
+console.log('- user_action_scroll: scroll ≥20px');
+console.log('- user_action_mouse_pattern: significance ≥0.02'); 
+console.log('- user_action_form_submit: form submit or button click');
+console.log('- user_action_focus_change: focus in/out');
+console.log('- user_action_page_visibility: visibility change');
+console.log('- user_action_mouse_hover: hover ≥100ms');
+console.log('- user_action_clipboard: copy/cut/paste');
+
 // Initialize smart assistant
 let smartAssistantScript: HTMLScriptElement | null = null;
 
 function initializeSmartAssistant(): void {
   // Check if smart assistant is enabled
-  chrome.storage.local.get(['assistantEnabled'], (result) => {
+  const api = getBrowserAPI();
+  if (api && api.storage) {
+    api.storage.local.get(['assistantEnabled'], (result: any) => {
     const isEnabled = result.assistantEnabled !== false; // Default to true
     
     if (isEnabled && !smartAssistantScript) {
       // Load smart assistant script
       smartAssistantScript = document.createElement('script');
-      smartAssistantScript.src = chrome.runtime.getURL('dist/smart-assistant.js');
+      const api = getBrowserAPI();
+      if (api && api.runtime && api.runtime.getURL) {
+        smartAssistantScript.src = api.runtime.getURL('dist/smart-assistant.js');
+      }
       smartAssistantScript.onload = () => {
         console.log('[Synapse] Smart assistant loaded');
       };
@@ -1116,18 +1290,22 @@ function initializeSmartAssistant(): void {
       
       console.log('[Synapse] Smart assistant disabled and removed');
     }
-  });
+    });
+  }
 }
 
 // Listen for guidance toggle messages
-chrome.runtime.onMessage.addListener((message, _sender, _sendResponse) => {
-  if (message.type === 'guidanceToggled') {
-    // Re-initialize smart assistant based on new setting
-    setTimeout(() => {
-      initializeSmartAssistant();
-    }, 100);
-  }
-});
+const browserAPI = getBrowserAPI();
+if (browserAPI) {
+  browserAPI.runtime.onMessage.addListener((message: any, _sender: any, _sendResponse: any) => {
+    if (message.type === 'guidanceToggled') {
+      // Re-initialize smart assistant based on new setting
+      setTimeout(() => {
+        initializeSmartAssistant();
+      }, 100);
+    }
+  });
+}
 
 // Initialize smart assistant
 initializeSmartAssistant();
