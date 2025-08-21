@@ -204,10 +204,11 @@ class WorkerTokenizer {
       'user_action_click': 1.0,
       'user_action_keydown': 2.0,
       'user_action_text_input': 3.0,
-      'browser_action_tab_activated': 4.0,
-      'browser_action_tab_created': 5.0,
-      'browser_action_tab_removed': 6.0,
-      'browser_action_tab_updated': 7.0
+      'user_action_focus_change': 4.0,
+      'browser_action_tab_activated': 5.0,
+      'browser_action_tab_created': 6.0,
+      'browser_action_tab_removed': 7.0,
+      'browser_action_tab_updated': 8.0
     };
     
     vector.push(eventTypeMap[event.type] || 0.0);
@@ -232,6 +233,13 @@ class WorkerTokenizer {
       vector.push(payload.ctrlKey ? 1.0 : 0.0);
       vector.push(payload.shiftKey ? 1.0 : 0.0);
       vector.push(payload.altKey ? 1.0 : 0.0);
+    } else if (event.type === 'user_action_focus_change') {
+      const payload = event.payload as any;
+      const focusType = payload.focus_type || 'unknown';
+      vector.push(focusType === 'focusin' ? 1.0 : 0.0);
+      vector.push(focusType === 'focusout' ? 1.0 : 0.0);
+      vector.push(payload.features?.is_input_field ? 1.0 : 0.0);
+      vector.push(payload.features?.path_depth || 0);
     } else {
       // Pad with zeros for other event types
       vector.push(0, 0, 0, 0);
@@ -310,6 +318,8 @@ class ContextExtractor {
         return this.keydownEventToToken(event as UserActionKeydownEvent);
       case 'user_action_text_input':
         return this.textInputEventToToken(event as UserActionTextInputEvent);
+      case 'user_action_focus_change':
+        return this.focusChangeEventToToken(event as UserActionFocusChangeEvent);
       case 'browser_action_tab_activated':
         return 'tab_switch';
       case 'browser_action_tab_created':
@@ -451,6 +461,7 @@ class ContextExtractor {
       'user_action_click': 0.8,
       'user_action_keydown': 0.6,
       'user_action_text_input': 0.7,
+      'user_action_focus_change': 0.4,
       'browser_action_tab_activated': 0.9,
       'browser_action_tab_created': 1.0,
       'browser_action_tab_removed': 0.9,
@@ -515,6 +526,15 @@ class ContextExtractor {
       default:
         return `text_input_${elementRole}_${pageType}`;
     }
+  }
+
+  private focusChangeEventToToken(event: UserActionFocusChangeEvent): string {
+    const payload = event.payload;
+    const focusType = payload.focus_type || 'unknown';
+    const elementRole = payload.features?.element_role || 'unknown';
+    const pageType = payload.features?.page_type || 'general';
+    
+    return `focus_${focusType}_${elementRole}_${pageType}`;
   }
 
   private inferPageType(url: string): string {

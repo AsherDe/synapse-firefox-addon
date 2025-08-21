@@ -2,21 +2,12 @@
  * Background Script - Main entry point with modular architecture
  */
 
-// EMERGENCY DEBUG: Immediate output using both console methods
-console.error('[SYNAPSE EMERGENCY] ===== SCRIPT FILE EXECUTED =====');
-console.log('[SYNAPSE EMERGENCY] ===== SCRIPT FILE EXECUTED =====');
-
-// Immediate debug output before any imports
-console.error('[SYNAPSE DEBUG] ===== BACKGROUND SCRIPT STARTING TO LOAD =====');
-console.error('[SYNAPSE DEBUG] Browser object exists:', typeof browser !== 'undefined');
-console.error('[SYNAPSE DEBUG] Chrome object exists:', typeof chrome !== 'undefined');
 
 import { MessageRouter } from './core/message-router';
 import { StateManager } from './core/state-manager';
 import { DataStorage } from './core/data-storage';
 import { MLService } from './core/ml-service';
 
-console.error('[SYNAPSE DEBUG] ===== IMPORTS COMPLETED SUCCESSFULLY =====');
 
 // Global services
 let messageRouter: MessageRouter;
@@ -30,17 +21,11 @@ async function initializeServices(): Promise<void> {
     console.log('[SYNAPSE BACKGROUND] Initializing services...');
     
     // Initialize core services
-    console.log('[SYNAPSE BACKGROUND] Creating StateManager...');
     stateManager = new StateManager();
-    
-    console.log('[SYNAPSE BACKGROUND] Creating DataStorage...');
     dataStorage = new DataStorage(stateManager);
-    
-    console.log('[SYNAPSE BACKGROUND] Creating MessageRouter...');
     messageRouter = new MessageRouter();
     
     // Set up message handlers
-    console.log('[SYNAPSE BACKGROUND] Setting up message handlers...');
     setupMessageHandlers();
     setupConnectionHandlers();
     
@@ -66,7 +51,6 @@ async function initializeServices(): Promise<void> {
     });
     
     // MLService放在最后创建，确保状态监听器已经设置好
-    console.log('[SYNAPSE BACKGROUND] Creating MLService...');
     mlService = new MLService(stateManager, dataStorage);
     
     console.log('[SYNAPSE BACKGROUND] ===== SERVICES INITIALIZED SUCCESSFULLY =====');
@@ -84,6 +68,7 @@ function setupMessageHandlers(): void {
     'user_action_keydown': handleUserActionEvent,
     'user_action_text_input': handleUserActionEvent,
     'user_action_mouse_hover': handleUserActionEvent,
+    'user_action_focus_change': handleUserActionEvent,
     'browser_action_tab_activated': handleBrowserActionEvent,
     'browser_action_tab_created': handleBrowserActionEvent,
     'browser_action_tab_removed': handleBrowserActionEvent,
@@ -474,19 +459,12 @@ async function sendInitialDataToPopup(port: any): Promise<void> {
   }
 }
 
-// Add immediate console output that should appear even if there are errors
-console.error('[SYNAPSE BACKGROUND] ===== BACKGROUND SCRIPT FILE LOADED =====');
-console.error('[SYNAPSE BACKGROUND] This should appear in console immediately');
-
 // Initialize everything when the background script loads
-console.log('[SYNAPSE BACKGROUND] ===== BACKGROUND SCRIPT STARTING =====');
-console.log('[SYNAPSE BACKGROUND] Timestamp:', new Date().toISOString());
 
 initializeServices().catch(error => {
   console.error('[SYNAPSE BACKGROUND] Critical initialization error:', error);
 });
 
-console.log('[SYNAPSE BACKGROUND] ===== BACKGROUND SCRIPT LOADED =====');
 
 // Cleanup on extension unload
 self.addEventListener('beforeunload', () => {
