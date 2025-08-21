@@ -2,21 +2,16 @@
  * Background Script - Main entry point with modular architecture
  */
 
-// EMERGENCY DEBUG: Immediate output using both console methods
-console.error('[SYNAPSE EMERGENCY] ===== SCRIPT FILE EXECUTED =====');
-console.log('[SYNAPSE EMERGENCY] ===== SCRIPT FILE EXECUTED =====');
-
-// Immediate debug output before any imports
-console.error('[SYNAPSE DEBUG] ===== BACKGROUND SCRIPT STARTING TO LOAD =====');
-console.error('[SYNAPSE DEBUG] Browser object exists:', typeof browser !== 'undefined');
-console.error('[SYNAPSE DEBUG] Chrome object exists:', typeof chrome !== 'undefined');
 
 import { MessageRouter } from './core/message-router';
 import { StateManager } from './core/state-manager';
 import { DataStorage } from './core/data-storage';
 import { MLService } from './core/ml-service';
+// types imported only for compile-time assistance (not emitted)
+// We rely on the ambient declarations in types.ts via triple-slash in worker, so here we just use minimal typing.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+// Note: types are declared globally in types.ts (no module exports), so we avoid importing them here.
 
-console.error('[SYNAPSE DEBUG] ===== IMPORTS COMPLETED SUCCESSFULLY =====');
 
 // Global services
 let messageRouter: MessageRouter;
@@ -30,17 +25,11 @@ async function initializeServices(): Promise<void> {
     console.log('[SYNAPSE BACKGROUND] Initializing services...');
     
     // Initialize core services
-    console.log('[SYNAPSE BACKGROUND] Creating StateManager...');
     stateManager = new StateManager();
-    
-    console.log('[SYNAPSE BACKGROUND] Creating DataStorage...');
     dataStorage = new DataStorage(stateManager);
-    
-    console.log('[SYNAPSE BACKGROUND] Creating MessageRouter...');
     messageRouter = new MessageRouter();
     
     // Set up message handlers
-    console.log('[SYNAPSE BACKGROUND] Setting up message handlers...');
     setupMessageHandlers();
     setupConnectionHandlers();
     
@@ -66,7 +55,6 @@ async function initializeServices(): Promise<void> {
     });
     
     // MLService放在最后创建，确保状态监听器已经设置好
-    console.log('[SYNAPSE BACKGROUND] Creating MLService...');
     mlService = new MLService(stateManager, dataStorage);
     
     console.log('[SYNAPSE BACKGROUND] ===== SERVICES INITIALIZED SUCCESSFULLY =====');
@@ -83,6 +71,14 @@ function setupMessageHandlers(): void {
     'user_action_click': handleUserActionEvent,
     'user_action_keydown': handleUserActionEvent,
     'user_action_text_input': handleUserActionEvent,
+    'user_action_scroll': handleUserActionEvent,
+    'user_action_mouse_pattern': handleUserActionEvent,
+    'user_action_form_submit': handleUserActionEvent,
+    'user_action_focus_change': handleUserActionEvent,
+    'user_action_page_visibility': handleUserActionEvent,
+    'user_action_mouse_hover': handleUserActionEvent,
+    'user_action_clipboard': handleUserActionEvent,
+    'userAction': handleUserActionEvent,
     'browser_action_tab_activated': handleBrowserActionEvent,
     'browser_action_tab_created': handleBrowserActionEvent,
     'browser_action_tab_removed': handleBrowserActionEvent,
@@ -101,6 +97,7 @@ function setupMessageHandlers(): void {
     'getModelInfo': handleGetModelInfoMessage,
     'trainModel': handleTrainModelMessage,
     'getSkills': handleGetSkillsMessage,
+    'getLearnedSkills': handleGetLearnedSkillsMessage,
     
     // State queries
     'getPauseState': handleGetPauseStateMessage,
@@ -109,10 +106,14 @@ function setupMessageHandlers(): void {
     'guidanceToggled': handleGuidanceToggledMessage,
     'exportData': handleExportDataMessage,
     'importData': handleImportDataMessage,
+  'getGuidanceState': handleGetGuidanceStateMessage,
+  'setGuidanceState': handleSetGuidanceStateMessage,
+  'getStorageOverview': handleGetStorageOverviewMessage,
     
     // Codebook and vocabulary
     'getCodebookInfo': handleGetCodebookInfoMessage,
-    'getVocabulary': handleGetVocabularyMessage
+  'getVocabulary': handleGetVocabularyMessage,
+  'getState': handleGetStateMessage,
   });
 }
 
@@ -142,12 +143,27 @@ async function handleUserActionEvent(message: any, sender: any): Promise<void> {
       return;
     }
 
-    const event = {
+    // Build EnrichedEvent with required context structure
+    const tabId: number | null = sender.tab?.id ?? null;
+    const windowId: number | null = sender.tab?.windowId ?? null;
+    let tabInfo: chrome.tabs.Tab | undefined = sender.tab;
+    if (!tabInfo && tabId !== null) {
+      try {
+        tabInfo = await browser.tabs.get(tabId);
+      } catch {
+        // ignore
+      }
+    }
+
+    const event: EnrichedEvent | any = {
       type: message.type,
       payload: message.payload,
       timestamp: Date.now(),
-      url: sender.url || message.url,
-      tabId: sender.tab?.id
+      context: {
+        tabId,
+        windowId,
+        tabInfo
+      }
     };
 
     // Add to sequence
@@ -165,6 +181,17 @@ async function handleUserActionEvent(message: any, sender: any): Promise<void> {
       type: 'eventAdded',
       data: event
     });
+
+    // 获取最新预测并广播（打通事件->预测->UI 链路）
+    try {
+      const prediction = await mlService.getPrediction();
+      messageRouter.broadcast('popup', {
+        type: 'predictionUpdate',
+        data: prediction
+      });
+    } catch (predErr) {
+      console.warn('[Background] Prediction attempt failed (will continue):', predErr);
+    }
     
     // Check if training is needed
     const sequence = await dataStorage.getSequence('globalActionSequence');
@@ -172,6 +199,16 @@ async function handleUserActionEvent(message: any, sender: any): Promise<void> {
       try {
         await mlService.trainModel();
         console.log('[Background] Model training completed');
+        // 训练完成后再触发一次预测更新（模型可能改善）
+        try {
+          const postTrainPrediction = await mlService.getPrediction();
+          messageRouter.broadcast('popup', {
+            type: 'predictionUpdate',
+            data: postTrainPrediction
+          });
+        } catch (e) {
+          console.warn('[Background] Post-train prediction failed:', e);
+        }
       } catch (error) {
         console.error('[Background] Training failed:', error);
       }
@@ -188,11 +225,26 @@ async function handleBrowserActionEvent(message: any, sender: any): Promise<void
       return;
     }
 
-    const event = {
+    const tabId: number | null = sender.tab?.id ?? null;
+    const windowId: number | null = sender.tab?.windowId ?? null;
+    let tabInfo: chrome.tabs.Tab | undefined = sender.tab;
+    if (!tabInfo && tabId !== null) {
+      try {
+        tabInfo = await browser.tabs.get(tabId);
+      } catch {
+        // ignore
+      }
+    }
+
+    const event: EnrichedEvent | any = {
       type: message.type,
       payload: message.payload,
       timestamp: Date.now(),
-      tabId: sender.tab?.id
+      context: {
+        tabId,
+        windowId,
+        tabInfo
+      }
     };
 
     await dataStorage.addToSequence('globalActionSequence', event);
@@ -313,6 +365,16 @@ async function handleGetSkillsMessage(): Promise<any> {
   }
 }
 
+async function handleGetLearnedSkillsMessage(): Promise<any> {
+  try {
+    const skills = await mlService.getSkills();
+    return { success: true, data: skills };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    return { success: false, error: errorMessage };
+  }
+}
+
 async function handleGetPauseStateMessage(): Promise<any> {
   const paused = stateManager.get('extensionPaused') || false;
   return { success: true, data: paused };
@@ -397,6 +459,68 @@ async function handleGetVocabularyMessage(): Promise<any> {
   }
 }
 
+async function handleGetGuidanceStateMessage(): Promise<any> {
+  try {
+    const enabled = stateManager.get('assistantEnabled');
+    return { success: true, data: enabled !== false };
+  } catch (e) {
+    return { success: false, error: e instanceof Error ? e.message : 'Unknown error' };
+  }
+}
+
+async function handleSetGuidanceStateMessage(message: any): Promise<any> {
+  try {
+    const enabled = !!message.enabled;
+    stateManager.set('assistantEnabled', enabled);
+    stateManager.markAsPersistent('assistantEnabled');
+    return { success: true };
+  } catch (e) {
+    return { success: false, error: e instanceof Error ? e.message : 'Unknown error' };
+  }
+}
+
+async function handleGetStorageOverviewMessage(): Promise<any> {
+  try {
+    const stats = await dataStorage.getStorageStats();
+    return { success: true, data: stats };
+  } catch (e) {
+    return { success: false, error: e instanceof Error ? e.message : 'Unknown error' };
+  }
+}
+
+async function handleGetStateMessage(): Promise<any> {
+  try {
+    // Export a safe snapshot (avoid huge sequences)
+    const snapshotKeys = [
+      'modelLastTrained',
+      'modelTrainingStatus',
+      'trainingInProgress',
+      'modelTrainingSessions',
+      'lastPrediction',
+      'mlWorkerStatus',
+      'fullModelInfo',
+      'learningMetrics'
+    ];
+    const state: Record<string, any> = {};
+    snapshotKeys.forEach(k => state[k] = stateManager.get(k));
+
+    // Derive convenience booleans
+    const modelInfo = state.fullModelInfo;
+    const modelReady = !!(modelInfo && (modelInfo.isReady || modelInfo.workerReady));
+
+    return {
+      success: true,
+      data: {
+        ...state,
+        modelReady
+      }
+    };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    return { success: false, error: errorMessage };
+  }
+}
+
 // Connection message handlers
 async function handlePopupMessage(port: any, message: any): Promise<void> {
   try {
@@ -473,19 +597,12 @@ async function sendInitialDataToPopup(port: any): Promise<void> {
   }
 }
 
-// Add immediate console output that should appear even if there are errors
-console.error('[SYNAPSE BACKGROUND] ===== BACKGROUND SCRIPT FILE LOADED =====');
-console.error('[SYNAPSE BACKGROUND] This should appear in console immediately');
-
 // Initialize everything when the background script loads
-console.log('[SYNAPSE BACKGROUND] ===== BACKGROUND SCRIPT STARTING =====');
-console.log('[SYNAPSE BACKGROUND] Timestamp:', new Date().toISOString());
 
 initializeServices().catch(error => {
   console.error('[SYNAPSE BACKGROUND] Critical initialization error:', error);
 });
 
-console.log('[SYNAPSE BACKGROUND] ===== BACKGROUND SCRIPT LOADED =====');
 
 // Cleanup on extension unload
 self.addEventListener('beforeunload', () => {

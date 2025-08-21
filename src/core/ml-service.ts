@@ -24,6 +24,31 @@ export class MLService {
   private dataStorage: DataStorage;
   private pendingRequests: Map<string, { resolve: Function; reject: Function }> = new Map();
   private requestCounter: number = 0;
+  // Training concurrency control
+  private trainingLock = false; // true while a trainModel call is in-flight
+  private pendingTrainAfterCurrent = false; // flag to run another training right after current finishes
+
+  // Normalize an event object to ensure it has the EnrichedEvent context
+  private async normalizeEvent(event: any): Promise<any> {
+    if (event && !event.context) {
+      const tabId = event.tabId ?? null;
+      let windowId: number | null = null;
+      let tabInfo: chrome.tabs.Tab | undefined = undefined;
+      if (typeof tabId === 'number') {
+        try {
+          const fetched = await browser.tabs.get(tabId);
+            tabInfo = fetched;
+            windowId = fetched?.windowId ?? null;
+        } catch {/* ignore */}
+      }
+      event.context = { tabId, windowId, tabInfo };
+    }
+    return event;
+  }
+
+  private async normalizeSequence(sequence: any[]): Promise<any[]> {
+    return Promise.all(sequence.map(ev => this.normalizeEvent(ev)));
+  }
 
   constructor(stateManager: StateManager, dataStorage: DataStorage) {
     this.stateManager = stateManager;
@@ -101,6 +126,10 @@ export class MLService {
       case 'training_complete':
         this.stateManager.set('modelLastTrained', Date.now());
         this.stateManager.set('modelTrainingStatus', 'completed');
+        try {
+          const currentSessions = this.stateManager.get('modelTrainingSessions') || 0;
+          this.stateManager.set('modelTrainingSessions', currentSessions + 1);
+        } catch {/* ignore */}
         console.log('[MLService] Training completed successfully');
         break;
         
@@ -125,6 +154,15 @@ export class MLService {
       case 'incremental_learning_complete':
         console.log('[MLService] Incremental learning completed');
         break;
+      case 'event_processed': {
+        // Store latest learning metrics & timestamp for UI/diagnostics
+        const anyMsg: any = message;
+        if (anyMsg.learningMetrics) {
+          this.stateManager.set('learningMetrics', anyMsg.learningMetrics);
+        }
+        this.stateManager.set('lastEventProcessedAt', Date.now());
+        break;
+      }
         
       default:
         console.warn('[MLService] Unknown worker message type:', message.type);
@@ -149,7 +187,7 @@ export class MLService {
           this.pendingRequests.delete(requestId);
           reject(new Error('ML Worker request timeout'));
         }
-      }, 30000); // 30 second timeout
+      }, 180000); // 3min timeout
       
       this.worker.postMessage(message);
     });
@@ -159,20 +197,43 @@ export class MLService {
    * Train the model with current sequence data
    */
   async trainModel(): Promise<void> {
+    // If a training job is already running, mark a pending retrigger and exit
+    if (this.trainingLock) {
+      this.pendingTrainAfterCurrent = true; // coalesce multiple rapid calls
+      console.log('[MLService] Training already in progress; coalescing request.');
+      return;
+    }
+
+    this.trainingLock = true;
+    this.pendingTrainAfterCurrent = false; // reset before starting
+    this.stateManager.set('modelTrainingStatus', 'training');
+    this.stateManager.set('trainingInProgress', true);
+
     try {
-      this.stateManager.set('modelTrainingStatus', 'training');
-      
       const sequence = await this.dataStorage.getSequence('globalActionSequence');
-      
+      const normalized = await this.normalizeSequence(sequence);
+
       await this.sendToWorker({
         type: 'train',
-        data: { sequence }
+        data: { sequence: normalized }
       });
-      
     } catch (error) {
       console.error('[MLService] Training failed:', error);
       this.stateManager.set('modelTrainingStatus', 'failed');
       throw error;
+    } finally {
+      // Release lock
+      this.trainingLock = false;
+      this.stateManager.set('trainingInProgress', false);
+      // If another training was requested during execution, schedule it (microtask) to avoid deep recursion
+      if (this.pendingTrainAfterCurrent) {
+        console.log('[MLService] Running coalesced training request.');
+        // Defer to next event loop turn
+        setTimeout(() => {
+          // Guard: if another training started in meantime, the lock will prevent duplicate
+          this.trainModel().catch(err => console.error('[MLService] Coalesced training failed:', err));
+        }, 0);
+      }
     }
   }
 
@@ -184,10 +245,11 @@ export class MLService {
       // Get recent sequence for prediction
       const sequence = await this.dataStorage.getSequence('globalActionSequence');
       const currentSequence = sequence.slice(-10); // Get last 10 events for prediction
+      const normalized = await this.normalizeSequence(currentSequence);
       
       const result = await this.sendToWorker({
         type: 'predict',
-        data: { currentSequence }
+        data: { currentSequence: normalized }
       });
       
       this.stateManager.set('lastPrediction', result);
@@ -279,6 +341,7 @@ export class MLService {
    */
   async processEvent(event: any): Promise<any> {
     try {
+  event = await this.normalizeEvent(event);
       return await this.sendToWorker({
         type: 'processEvent',
         data: { event }

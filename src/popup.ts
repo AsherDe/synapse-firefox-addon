@@ -11,7 +11,7 @@ class PopupController {
 
   constructor() {
     this.setupBackgroundConnection();
-    this.loadGuidanceState(); // Keep this as it uses browser.storage directly
+  this.loadGuidanceState();
     this.setupEventListeners();
     // All other data now loaded via background connection
   }
@@ -74,7 +74,7 @@ class PopupController {
         break;
         
       case 'predictionUpdate':
-        this.updatePredictionDisplay(message.data.prediction);
+  this.updatePredictionDisplay(message.data);
         break;
         
       case 'modelInfoUpdate':
@@ -251,32 +251,30 @@ class PopupController {
   }
 
   private loadGuidanceState(): void {
-    browser.storage.local.get(['assistantEnabled'], (result: any) => {
-      const isEnabled = result.assistantEnabled !== false; // Default to true
-      this.updateGuidanceUI(isEnabled);
-    });
+    this.sendToBackground({ type: 'getGuidanceState' })
+      .then((resp: any) => {
+        const enabled = resp?.data !== false;
+        this.updateGuidanceUI(enabled);
+      })
+      .catch(() => this.updateGuidanceUI(true));
   }
 
   private toggleGuidance(enabled: boolean): void {
-    browser.storage.local.set({ assistantEnabled: enabled }, () => {
-      console.log(`Smart guidance ${enabled ? 'enabled' : 'disabled'}`);
-      
-      // Notify content scripts about the change
-      browser.tabs.query({ active: true, currentWindow: true }, (tabs: any) => {
-        if (tabs[0]?.id) {
-          browser.tabs.sendMessage(tabs[0].id, {
-            type: 'guidanceToggled',
-            enabled: enabled
-          });
-        }
-      });
-      
-      // Notify background script
-      this.sendToBackground({
-        type: 'guidanceToggled',
-        enabled: enabled
-      });
+    console.log(`Smart guidance ${enabled ? 'enabled' : 'disabled'}`);
+    // Notify content scripts about the change
+    browser.tabs.query({ active: true, currentWindow: true }, (tabs: any) => {
+      if (tabs[0]?.id) {
+        browser.tabs.sendMessage(tabs[0].id, {
+          type: 'guidanceToggled',
+          enabled: enabled
+        });
+      }
     });
+    // Persist via background
+    this.sendToBackground({ type: 'setGuidanceState', enabled })
+      .catch(err => console.warn('[Popup] Failed to persist guidance state:', err));
+    // Legacy notification for existing handler
+    this.sendToBackground({ type: 'guidanceToggled', enabled });
   }
 
   private updateGuidanceUI(enabled: boolean): void {
@@ -425,22 +423,22 @@ class PopupController {
       predictionElement.innerHTML = '<div class="empty-state">No prediction available yet</div>';
       return;
     }
-
-    const timeSincePrediction = Date.now() - prediction.timestamp;
-    const isRecent = timeSincePrediction < 30000; // 30 seconds
+    const token = prediction.token || prediction.tokenId || 'unknown';
+    const confidence = typeof prediction.confidence === 'number' ? prediction.confidence : 0;
+    const ts = prediction.timestamp || Date.now();
+    const isRecent = (Date.now() - ts) < 30000;
 
     predictionElement.innerHTML = `
       <div class="prediction-item ${isRecent ? 'recent' : 'stale'}">
         <div class="prediction-header">
-          <strong>Next Token Prediction</strong>
-          <span class="prediction-time">${this.formatTime(prediction.timestamp)}</span>
+          <strong>Next Action Prediction</strong>
+          <span class="prediction-time">${this.formatTime(ts)}</span>
         </div>
         <div class="prediction-details">
-          <div class="token-id">Token ID: <code>${prediction.tokenId}</code></div>
-          <div class="confidence">Confidence: <span class="confidence-bar" style="width: ${prediction.confidence * 100}%">${(prediction.confidence * 100).toFixed(1)}%</span></div>
+          <div class="token-id">Token: <code>${token}</code></div>
+          <div class="confidence">Confidence: <span class="confidence-bar" style="width: ${confidence * 100}%">${(confidence * 100).toFixed(1)}%</span></div>
         </div>
-      </div>
-    `;
+      </div>`;
   }
 
   private updateModelInfoDisplay(modelInfo: any, isReady: boolean): void {
@@ -561,24 +559,43 @@ class PopupController {
   private async loadModelDebugInfo(): Promise<void> {
     const modelArchElement = document.getElementById('modelArchitecture');
     const trainingHistoryElement = document.getElementById('trainingHistory');
+    const modelInfoPromise = new Promise<any>(resolve => {
+      browser.runtime.sendMessage({ type: 'getModelInfo' }, (resp: any) => resolve(resp));
+    });
+    const statePromise = new Promise<any>(resolve => {
+      browser.runtime.sendMessage({ type: 'getState' }, (resp: any) => resolve(resp));
+    });
 
-    browser.runtime.sendMessage({ type: 'getModelInfo' }, (response: any) => {
-      const modelInfo = response?.success ? response.data : response?.modelInfo;
-      const isReady = response?.success ? (response.data ? true : false) : response?.isReady;
-      
+    try {
+      const [modelResp, stateResp] = await Promise.all([modelInfoPromise, statePromise]);
+      const modelInfo = modelResp?.success ? modelResp.data : modelResp?.modelInfo;
+      const stateData = stateResp?.success ? stateResp.data : {};
+      const isReady = !!(stateData?.modelReady || (modelResp?.success && modelResp.data));
+
       if (modelArchElement && modelInfo) {
         modelArchElement.textContent = JSON.stringify(modelInfo, null, 2);
       }
-      
+
       if (trainingHistoryElement) {
         const history = {
-          lastTraining: 'Not available in this implementation',
-          totalTrainingSessions: 'Tracked in background script',
-          modelReady: isReady || false
+          lastTraining: stateData.modelLastTrained ? new Date(stateData.modelLastTrained).toISOString() : null,
+          trainingStatus: stateData.modelTrainingStatus || 'unknown',
+          trainingInProgress: !!stateData.trainingInProgress,
+          totalTrainingSessions: stateData.modelTrainingSessions ?? 0,
+          modelReady: isReady,
+          lastPrediction: stateData.lastPrediction ? {
+            token: stateData.lastPrediction.token || stateData.lastPrediction.tokenId,
+            confidence: stateData.lastPrediction.confidence
+          } : null,
+          workerStatus: stateData.mlWorkerStatus || 'unknown'
         };
         trainingHistoryElement.textContent = JSON.stringify(history, null, 2);
       }
-    });
+    } catch (err) {
+      if (trainingHistoryElement) {
+        trainingHistoryElement.textContent = JSON.stringify({ error: (err as Error).message }, null, 2);
+      }
+    }
   }
 
   private async loadDebugInfo(): Promise<void> {
@@ -598,19 +615,19 @@ class PopupController {
     }
 
     if (storageInfoElement) {
-      // Get storage usage information
-      browser.storage.session.getBytesInUse(null, (sessionBytes: any) => {
-        browser.storage.local.getBytesInUse(null, (localBytes: any) => {
+      this.sendToBackground({ type: 'getStorageOverview' })
+        .then((resp: any) => {
+          const data = resp?.data || {};
           const storageInfo = {
-            sessionStorage: `${sessionBytes} bytes`,
-            localStorage: `${localBytes} bytes`,
+            bytesInUse: data.bytesInUse || 0,
+            keys: data.keys || [],
             lastUpdate: new Date().toISOString()
           };
-          if (storageInfoElement) {
-            storageInfoElement.textContent = JSON.stringify(storageInfo, null, 2);
-          }
+          storageInfoElement.textContent = JSON.stringify(storageInfo, null, 2);
+        })
+        .catch(err => {
+          storageInfoElement.textContent = JSON.stringify({ error: (err as Error).message }, null, 2);
         });
-      });
     }
   }
 
@@ -717,16 +734,9 @@ class PopupController {
   private async getSessionStorageData(): Promise<any> {
     try {
       // In Manifest V2, session storage might not be available
-      if (browser.storage.session) {
-        return new Promise((resolve) => {
-          browser.storage.session.get(null, (data: any) => {
-            resolve(data);
-          });
-        });
-      } else {
-        console.warn('[Synapse] Session storage not available in this browser version');
-        return {};
-      }
+  // Delegate to background for any potential future abstraction
+  const resp = await this.sendToBackground({ type: 'getState' });
+  return { stateSnapshot: resp?.data || {} };
     } catch (error) {
       console.warn('[Synapse] Session storage error:', error);
       return {};
@@ -734,11 +744,9 @@ class PopupController {
   }
 
   private async getLocalStorageData(): Promise<any> {
-    return new Promise((resolve) => {
-      browser.storage.local.get(null, (data: any) => {
-        resolve(data);
-      });
-    });
+  // Use background aggregated snapshot; local storage raw dump avoided for privacy
+  const resp = await this.sendToBackground({ type: 'getState' });
+  return { stateSnapshot: resp?.data || {} };
   }
 
   private async getModelInfoData(): Promise<any> {

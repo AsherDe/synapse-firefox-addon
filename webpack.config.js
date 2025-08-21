@@ -36,7 +36,8 @@ module.exports = {
       patterns: [
         { from: 'node_modules/webextension-polyfill/dist/browser-polyfill.min.js', to: 'browser-polyfill.min.js' },
         { from: 'popup.html', to: 'popup.html' },
-        { from: 'manifest.json', to: 'manifest.json' }
+        { from: 'manifest.json', to: 'manifest.json' },
+        { from: 'icons', to: 'icons' } 
       ]
     })
   ],

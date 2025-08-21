@@ -18,6 +18,11 @@
     "notifications",
     "<all_urls>"
   ],
+
+  "icons": {
+    "48": "dist/icons/icon-48.png",
+    "96": "dist/icons/icon-96.png"
+  },
   
   "background": {
     "scripts": ["dist/browser-polyfill.min.js", "dist/background.js"],
