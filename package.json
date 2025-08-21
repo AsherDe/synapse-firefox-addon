@@ -18,14 +18,15 @@
   ],
   "scripts": {
     "build": "webpack && web-ext build --overwrite-dest",
-    "dev": "webpack --mode=development --watch",
+    "watch": "webpack --mode=development --watch",
     "start": "web-ext run --target=firefox-desktop",
-    "watch": "webpack --mode=development --watch"
+    "dev": "concurrently -k -n WEBPACK,FIREFOX -c yellow,cyan \"webpack --mode=development --watch\" \"web-ext run --target=firefox-desktop --devtools --browser-console\""
   },
   "devDependencies": {
     "@types/chrome": "^0.0.268",
     "@types/node": "^20.0.0",
     "@types/webextension-polyfill": "^0.12.3",
+    "concurrently": "^9.2.0",
     "copy-webpack-plugin": "^13.0.1",
     "ts-loader": "^9.5.2",
     "typescript": "^5.9.2",
