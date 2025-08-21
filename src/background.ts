@@ -67,8 +67,14 @@ function setupMessageHandlers(): void {
     'user_action_click': handleUserActionEvent,
     'user_action_keydown': handleUserActionEvent,
     'user_action_text_input': handleUserActionEvent,
-    'user_action_mouse_hover': handleUserActionEvent,
+    'user_action_scroll': handleUserActionEvent,
+    'user_action_mouse_pattern': handleUserActionEvent,
+    'user_action_form_submit': handleUserActionEvent,
     'user_action_focus_change': handleUserActionEvent,
+    'user_action_page_visibility': handleUserActionEvent,
+    'user_action_mouse_hover': handleUserActionEvent,
+    'user_action_clipboard': handleUserActionEvent,
+    'userAction': handleUserActionEvent,
     'browser_action_tab_activated': handleBrowserActionEvent,
     'browser_action_tab_created': handleBrowserActionEvent,
     'browser_action_tab_removed': handleBrowserActionEvent,
@@ -87,6 +93,7 @@ function setupMessageHandlers(): void {
     'getModelInfo': handleGetModelInfoMessage,
     'trainModel': handleTrainModelMessage,
     'getSkills': handleGetSkillsMessage,
+    'getLearnedSkills': handleGetLearnedSkillsMessage,
     
     // State queries
     'getPauseState': handleGetPauseStateMessage,
@@ -290,6 +297,16 @@ async function handleTrainModelMessage(): Promise<any> {
 }
 
 async function handleGetSkillsMessage(): Promise<any> {
+  try {
+    const skills = await mlService.getSkills();
+    return { success: true, data: skills };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    return { success: false, error: errorMessage };
+  }
+}
+
+async function handleGetLearnedSkillsMessage(): Promise<any> {
   try {
     const skills = await mlService.getSkills();
     return { success: true, data: skills };

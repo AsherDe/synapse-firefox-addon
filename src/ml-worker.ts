@@ -204,11 +204,17 @@ class WorkerTokenizer {
       'user_action_click': 1.0,
       'user_action_keydown': 2.0,
       'user_action_text_input': 3.0,
-      'user_action_focus_change': 4.0,
-      'browser_action_tab_activated': 5.0,
-      'browser_action_tab_created': 6.0,
-      'browser_action_tab_removed': 7.0,
-      'browser_action_tab_updated': 8.0
+      'user_action_scroll': 4.0,
+      'user_action_mouse_pattern': 5.0,
+      'user_action_form_submit': 6.0,
+      'user_action_focus_change': 7.0,
+      'user_action_page_visibility': 8.0,
+      'user_action_mouse_hover': 9.0,
+      'user_action_clipboard': 10.0,
+      'browser_action_tab_activated': 11.0,
+      'browser_action_tab_created': 12.0,
+      'browser_action_tab_removed': 13.0,
+      'browser_action_tab_updated': 14.0
     };
     
     vector.push(eventTypeMap[event.type] || 0.0);
@@ -240,6 +246,13 @@ class WorkerTokenizer {
       vector.push(focusType === 'focusout' ? 1.0 : 0.0);
       vector.push(payload.features?.is_input_field ? 1.0 : 0.0);
       vector.push(payload.features?.path_depth || 0);
+    } else if (event.type === 'user_action_page_visibility') {
+      const payload = event.payload as any;
+      const visibilityState = payload.visibility_state || 'unknown';
+      vector.push(visibilityState === 'visible' ? 1.0 : 0.0);
+      vector.push(visibilityState === 'hidden' ? 1.0 : 0.0);
+      vector.push(payload.features?.page_type === 'work' ? 1.0 : 0.0);
+      vector.push(0); // Placeholder for additional page visibility features
     } else {
       // Pad with zeros for other event types
       vector.push(0, 0, 0, 0);
@@ -318,8 +331,20 @@ class ContextExtractor {
         return this.keydownEventToToken(event as UserActionKeydownEvent);
       case 'user_action_text_input':
         return this.textInputEventToToken(event as UserActionTextInputEvent);
+      case 'user_action_scroll':
+        return 'scroll_action';
+      case 'user_action_mouse_pattern':
+        return 'mouse_pattern';
+      case 'user_action_form_submit':
+        return 'form_submit';
       case 'user_action_focus_change':
         return this.focusChangeEventToToken(event as UserActionFocusChangeEvent);
+      case 'user_action_page_visibility':
+        return this.pageVisibilityEventToToken(event as UserActionPageVisibilityEvent);
+      case 'user_action_mouse_hover':
+        return 'mouse_hover';
+      case 'user_action_clipboard':
+        return 'clipboard_action';
       case 'browser_action_tab_activated':
         return 'tab_switch';
       case 'browser_action_tab_created':
@@ -461,7 +486,13 @@ class ContextExtractor {
       'user_action_click': 0.8,
       'user_action_keydown': 0.6,
       'user_action_text_input': 0.7,
+      'user_action_scroll': 0.3,
+      'user_action_mouse_pattern': 0.5,
+      'user_action_form_submit': 0.9,
       'user_action_focus_change': 0.4,
+      'user_action_page_visibility': 0.6,
+      'user_action_mouse_hover': 0.2,
+      'user_action_clipboard': 0.7,
       'browser_action_tab_activated': 0.9,
       'browser_action_tab_created': 1.0,
       'browser_action_tab_removed': 0.9,
@@ -535,6 +566,14 @@ class ContextExtractor {
     const pageType = payload.features?.page_type || 'general';
     
     return `focus_${focusType}_${elementRole}_${pageType}`;
+  }
+
+  private pageVisibilityEventToToken(event: UserActionPageVisibilityEvent): string {
+    const payload = event.payload;
+    const visibilityState = payload.visibility_state || 'unknown';
+    const pageType = payload.features?.page_type || 'general';
+    
+    return `page_${visibilityState}_${pageType}`;
   }
 
   private inferPageType(url: string): string {
