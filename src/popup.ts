@@ -11,13 +11,9 @@ class PopupController {
 
   constructor() {
     this.setupBackgroundConnection();
-    this.loadSequence();
-    this.loadPrediction();
-    this.loadModelInfo();
-    this.loadPauseState();
-    this.loadGuidanceState();
+    this.loadGuidanceState(); // Keep this as it uses browser.storage directly
     this.setupEventListeners();
-    // No longer using periodic updates - using real-time connection instead
+    // All other data now loaded via background connection
   }
 
   /**
@@ -64,20 +60,47 @@ class PopupController {
         this.updateSequenceDisplay();
         break;
         
+      case 'eventAdded':
+        // Handle single event addition
+        if (message.data) {
+          this.sequence.push(message.data);
+          this.updateSequenceDisplay();
+        }
+        break;
+        
+      case 'sequenceCleared':
+        this.sequence = [];
+        this.updateSequenceDisplay();
+        break;
+        
       case 'predictionUpdate':
         this.updatePredictionDisplay(message.data.prediction);
         break;
         
       case 'modelInfoUpdate':
-        this.updateModelInfoDisplay(message.data.modelInfo, message.data.isReady);
+        // 直接使用收到的完整数据对象
+        if (message.data && message.data.isReady) {
+          this.updateModelInfoDisplay(message.data, true);
+        }
         break;
         
-      case 'pauseStateUpdate':
-        this.updatePauseUI(message.data.isPaused);
+      case 'pauseStateChanged':
+        this.updatePauseUI(message.data);
+        break;
+        
+      case 'dataReset':
+        this.sequence = [];
+        this.updateSequenceDisplay();
+        this.updatePredictionDisplay(null);
+        break;
+        
+      case 'dataCleared':
+        this.sequence = [];
+        this.updateSequenceDisplay();
         break;
         
       case 'initialData':
-        // Handle initial data load
+        console.log('[Popup] Received initial data:', message.data);
         if (message.data.sequence) {
           this.sequence = message.data.sequence;
           this.updateSequenceDisplay();
@@ -85,11 +108,12 @@ class PopupController {
         if (message.data.prediction) {
           this.updatePredictionDisplay(message.data.prediction);
         }
-        if (message.data.modelInfo) {
-          this.updateModelInfoDisplay(message.data.modelInfo, message.data.isReady);
+        // 处理初始模型信息
+        if (message.data.modelInfo && message.data.modelInfo.isReady) {
+          this.updateModelInfoDisplay(message.data.modelInfo, true);
         }
-        if (message.data.pauseState !== undefined) {
-          this.updatePauseUI(message.data.pauseState);
+        if (message.data.paused !== undefined) {
+          this.updatePauseUI(message.data.paused);
         }
         break;
         
@@ -202,18 +226,6 @@ class PopupController {
       });
   }
 
-  private loadSequence(): void {
-    this.sendToBackground({ type: 'getSequence' })
-      .then((response: any) => {
-        if (response && response.sequence) {
-          this.sequence = response.sequence;
-          this.updateSequenceDisplay();
-        }
-      })
-      .catch((error) => {
-        console.error('Failed to load sequence:', error);
-      });
-  }
 
   private loadPrediction(): void {
     browser.runtime.sendMessage({ type: 'getPrediction' }, (response: any) => {
@@ -221,19 +233,11 @@ class PopupController {
         console.error('Failed to load prediction:', browser.runtime.lastError.message);
         return;
       }
-      this.updatePredictionDisplay(response?.prediction);
+      const prediction = response?.success ? response.data : response?.prediction;
+      this.updatePredictionDisplay(prediction);
     });
   }
 
-  private loadModelInfo(): void {
-    browser.runtime.sendMessage({ type: 'getModelInfo' }, (response: any) => {
-      if (browser.runtime.lastError) {
-        console.error('Failed to load model info:', browser.runtime.lastError.message);
-        return;
-      }
-      this.updateModelInfoDisplay(response?.modelInfo, response?.isReady);
-    });
-  }
 
   private loadPauseState(): void {
     browser.runtime.sendMessage({ type: 'getPauseState' }, (response: any) => {
@@ -241,7 +245,8 @@ class PopupController {
         console.error('Failed to load pause state:', browser.runtime.lastError.message);
         return;
       }
-      this.updatePauseUI(response?.isPaused || false);
+      const isPaused = response?.success ? response.data : response?.isPaused;
+      this.updatePauseUI(isPaused || false);
     });
   }
 
@@ -323,7 +328,6 @@ class PopupController {
     console.log('[Popup] Using fallback periodic updates');
     this.updateInterval = window.setInterval(() => {
       this.loadPrediction();
-      this.loadModelInfo();
       this.loadPauseState();
     }, 5000);
   }
@@ -443,15 +447,19 @@ class PopupController {
     const modelElement = document.getElementById('modelInfo');
     if (!modelElement) return;
 
+    // Since we only call this with complete model info, simplify the logic
     if (!modelInfo || !isReady) {
       modelElement.innerHTML = `
         <div class="model-status">
-          <div class="status-indicator ${isReady ? 'ready' : 'loading'}"></div>
-          <span>${isReady ? 'Model Ready' : 'Model Loading...'}</span>
+          <div class="status-indicator loading"></div>
+          <span>Loading model information...</span>
         </div>
       `;
       return;
     }
+    
+    // Model info data is nested in modelInfo.info
+    const details = modelInfo.info || modelInfo;
 
     modelElement.innerHTML = `
       <div class="model-status">
@@ -459,9 +467,9 @@ class PopupController {
         <span>Model Ready</span>
       </div>
       <div class="model-details">
-        <div class="model-param">Vocab Size: ${modelInfo.vocabSize}</div>
-        <div class="model-param">Sequence Length: ${modelInfo.sequenceLength}</div>
-        <div class="model-param">Total Parameters: ${modelInfo.totalParams?.toLocaleString()}</div>
+        <div class="model-param">Vocab Size: ${details.vocabSize || 'N/A'}</div>
+        <div class="model-param">Sequence Length: ${details.sequenceLength || 'N/A'}</div>
+        <div class="model-param">ML Worker: ${details.workerReady ? 'Active' : 'Inactive'}</div>
       </div>
     `;
   }
@@ -543,7 +551,8 @@ class PopupController {
       // Request codebook info from background script
       browser.runtime.sendMessage({ type: 'getCodebookInfo' }, (response: any) => {
         if (response && codebookInfoElement) {
-          codebookInfoElement.textContent = JSON.stringify(response, null, 2);
+          const data = response?.success ? response.data : response;
+          codebookInfoElement.textContent = JSON.stringify(data, null, 2);
         }
       });
     }
@@ -554,15 +563,18 @@ class PopupController {
     const trainingHistoryElement = document.getElementById('trainingHistory');
 
     browser.runtime.sendMessage({ type: 'getModelInfo' }, (response: any) => {
-      if (modelArchElement && response?.modelInfo) {
-        modelArchElement.textContent = JSON.stringify(response.modelInfo, null, 2);
+      const modelInfo = response?.success ? response.data : response?.modelInfo;
+      const isReady = response?.success ? (response.data ? true : false) : response?.isReady;
+      
+      if (modelArchElement && modelInfo) {
+        modelArchElement.textContent = JSON.stringify(modelInfo, null, 2);
       }
       
       if (trainingHistoryElement) {
         const history = {
           lastTraining: 'Not available in this implementation',
           totalTrainingSessions: 'Tracked in background script',
-          modelReady: response?.isReady || false
+          modelReady: isReady || false
         };
         trainingHistoryElement.textContent = JSON.stringify(history, null, 2);
       }
@@ -624,80 +636,76 @@ class PopupController {
 
   private async exportAllData(): Promise<void> {
     try {
-      console.log('[Synapse] Starting data export...');
+      console.log('[Synapse] Export button clicked - starting data export...');
+
+      this.showExportMessage('Export started...', 'success');
+
+      // 使用 Promise.allSettled 来确保所有数据获取都会完成，即使其中一些失败
+      const [sessionDataResult, localDataResult, modelDataResult] = await Promise.allSettled([
+        this.getSessionStorageData(),
+        this.getLocalStorageData(),
+        this.getModelInfoData()
+      ]);
+
+      const sessionData = sessionDataResult.status === 'fulfilled' ? sessionDataResult.value : { error: sessionDataResult.reason };
+      const localData = localDataResult.status === 'fulfilled' ? localDataResult.value : { error: localDataResult.reason };
+      const modelData = modelDataResult.status === 'fulfilled' ? modelDataResult.value : { error: modelDataResult.reason };
+
+      console.log('[Synapse] Session storage data:', sessionData);
+      console.log('[Synapse] Local storage data:', localData);
+      console.log('[Synapse] Model data:', modelData);
 
       // Collect all data
       const exportData = {
         exportInfo: {
           timestamp: new Date().toISOString(),
-          version: '1.3.0',
+          version: '1.3.1',
           userAgent: navigator.userAgent,
           description: 'Complete Synapse extension data export for debugging - includes all event types including mouse patterns'
         },
-        
-        // Current session data
         eventSequence: this.sequence,
         sequenceStats: {
           totalEvents: this.sequence.length,
           eventTypeDistribution: this.getEventTypeDistribution(),
           recentActivity: this.getRecentActivity(),
           dataTypesIncluded: [
-            'user_action_click',
-            'user_action_keydown', 
-            'user_action_text_input',
-            'user_action_scroll',
-            'user_action_mouse_pattern', // Mouse movement data included
-            'user_action_form_submit',
-            'user_action_focus_change',
-            'user_action_page_visibility',
-            'user_action_mouse_hover',
-            'user_action_clipboard',
-            'browser_action_tab_created',
-            'browser_action_tab_activated',
-            'browser_action_tab_updated',
-            'browser_action_tab_removed'
+            'user_action_click', 'user_action_keydown', 'user_action_text_input',
+            'user_action_scroll', 'user_action_mouse_pattern', 'user_action_form_submit',
+            'user_action_focus_change', 'user_action_page_visibility', 'user_action_mouse_hover',
+            'user_action_clipboard', 'browser_action_tab_created', 'browser_action_tab_activated',
+            'browser_action_tab_updated', 'browser_action_tab_removed'
           ]
         },
-
-        // Get all stored data
-        sessionStorage: await this.getSessionStorageData(),
-        localStorage: await this.getLocalStorageData(),
-        
-        // Model information
-        modelInfo: await this.getModelInfoData(),
-        
-        // Runtime information
+        sessionStorage: sessionData,
+        localStorage: localData,
+        modelInfo: modelData,
         runtimeInfo: {
           popupLoadTime: new Date().toISOString(),
           updateIntervalActive: this.updateInterval !== null
         }
       };
 
-      // Create downloadable file
-      const jsonString = JSON.stringify(exportData, null, 2);
+      console.log('[Synapse] Creating export file...');
+      const jsonString = JSON.stringify(exportData, (_, value) => 
+        value instanceof Error ? `Error: ${value.message}` : value, 2
+      );
+      
       const blob = new Blob([jsonString], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
 
-      // Generate filename with timestamp
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
       const filename = `synapse-debug-data-${timestamp}.json`;
 
-      // Create download link and trigger download
       const downloadLink = document.createElement('a');
       downloadLink.href = url;
       downloadLink.download = filename;
-      downloadLink.style.display = 'none';
-      
       document.body.appendChild(downloadLink);
       downloadLink.click();
       document.body.removeChild(downloadLink);
       
-      // Clean up
       URL.revokeObjectURL(url);
       
       console.log(`[Synapse] Data exported successfully as ${filename}`);
-      
-      // Show success message
       this.showExportMessage('Data exported successfully!', 'success');
 
     } catch (error) {
@@ -707,11 +715,22 @@ class PopupController {
   }
 
   private async getSessionStorageData(): Promise<any> {
-    return new Promise((resolve) => {
-      browser.storage.session.get(null, (data: any) => {
-        resolve(data);
-      });
-    });
+    try {
+      // In Manifest V2, session storage might not be available
+      if (browser.storage.session) {
+        return new Promise((resolve) => {
+          browser.storage.session.get(null, (data: any) => {
+            resolve(data);
+          });
+        });
+      } else {
+        console.warn('[Synapse] Session storage not available in this browser version');
+        return {};
+      }
+    } catch (error) {
+      console.warn('[Synapse] Session storage error:', error);
+      return {};
+    }
   }
 
   private async getLocalStorageData(): Promise<any> {
@@ -723,20 +742,39 @@ class PopupController {
   }
 
   private async getModelInfoData(): Promise<any> {
-    return new Promise((resolve) => {
-      browser.runtime.sendMessage({ type: 'getModelInfo' }, (response: any) => {
-        browser.runtime.sendMessage({ type: 'getCodebookInfo' }, (codebookResponse: any) => {
-          browser.runtime.sendMessage({ type: 'getPrediction' }, (predictionResponse: any) => {
-            resolve({
-              modelInfo: response?.modelInfo,
-              isReady: response?.isReady,
-              codebookInfo: codebookResponse?.codebookInfo,
-              lastPrediction: predictionResponse?.prediction
-            });
+    try {
+      // 使用 Promise.all 并行发送三个请求，提高效率
+      const [modelResponse, codebookResponse, predictionResponse] = await Promise.all([
+        new Promise((resolve) => {
+          browser.runtime.sendMessage({ type: 'getModelInfo' }, (response: any) => {
+            console.log('[Popup] getModelInfo response:', response);
+            resolve(response);
           });
-        });
-      });
-    });
+        }),
+        new Promise((resolve) => {
+          browser.runtime.sendMessage({ type: 'getCodebookInfo' }, (response: any) => {
+            console.log('[Popup] getCodebookInfo response:', response);
+            resolve(response);
+          });
+        }),
+        new Promise((resolve) => {
+          browser.runtime.sendMessage({ type: 'getPrediction' }, (response: any) => {
+            console.log('[Popup] getPrediction response:', response);
+            resolve(response);
+          });
+        })
+      ]);
+
+      return {
+        modelInfo: (modelResponse as any)?.success ? (modelResponse as any).data : (modelResponse as any)?.modelInfo,
+        isReady: (modelResponse as any)?.success ? ((modelResponse as any).data ? true : false) : (modelResponse as any)?.isReady,
+        codebookInfo: (codebookResponse as any)?.success ? (codebookResponse as any).data : (codebookResponse as any)?.codebookInfo,
+        lastPrediction: (predictionResponse as any)?.success ? (predictionResponse as any).data : (predictionResponse as any)?.prediction
+      };
+    } catch (error) {
+      console.error('[Popup] Error in getModelInfoData:', error);
+      throw error;
+    }
   }
 
   private showExportMessage(message: string, type: 'success' | 'error'): void {
@@ -784,6 +822,16 @@ class PopupController {
 }
 
 // Initialize popup when DOM is loaded
+console.log('[SYNAPSE] Popup script loaded, waiting for DOMContentLoaded...');
+
 document.addEventListener('DOMContentLoaded', () => {
-  new PopupController();
+  console.log('[SYNAPSE] DOMContentLoaded fired, initializing PopupController...');
+  try {
+    new PopupController();
+    console.log('[SYNAPSE] PopupController created successfully!');
+  } catch (error) {
+    console.error('[SYNAPSE] Error creating PopupController:', error);
+  }
 });
+
+console.log('[SYNAPSE] Event listener added for DOMContentLoaded');

@@ -1,6 +1,6 @@
 {
   "name": "synapse",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "description": "Browser extension for FAST Token processing with ML-based user behavior prediction",
   "author": "Synapse Project Contributors",
   "license": "Apache-2.0",
@@ -17,16 +17,21 @@
     "firefox"
   ],
   "scripts": {
-    "build": "tsc && node build.js && web-ext build",
+    "build": "webpack && web-ext build --overwrite-dest",
+    "dev": "webpack --mode=development --watch",
     "start": "web-ext run --target=firefox-desktop",
-    "watch": "tsc --watch"
+    "watch": "webpack --mode=development --watch"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.268",
     "@types/node": "^20.0.0",
     "@types/webextension-polyfill": "^0.12.3",
+    "copy-webpack-plugin": "^13.0.1",
+    "ts-loader": "^9.5.2",
     "typescript": "^5.9.2",
-    "web-ext": "^7.0.0"
+    "web-ext": "^7.0.0",
+    "webpack": "^5.101.3",
+    "webpack-cli": "^6.0.1"
   },
   "dependencies": {
     "@tensorflow/tfjs": "^4.22.0",

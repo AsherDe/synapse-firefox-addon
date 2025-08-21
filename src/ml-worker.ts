@@ -693,6 +693,7 @@ class EnhancedMLEngine {
   private contextExtractor: ContextExtractor;
   public incrementalLearner: IncrementalLearner;
   private isInitialized: boolean = false;
+  private totalEventCount: number = 0;
 
   constructor() {
     this.contextExtractor = new ContextExtractor();
@@ -776,6 +777,9 @@ class EnhancedMLEngine {
     }
 
     console.log("[Enhanced ML] Starting enhanced training...");
+    
+    // 更新总事件数量用于置信度计算
+    this.totalEventCount = sequence.length;
     
     // Add experiences to incremental learner
     sequence.forEach(event => this.incrementalLearner.addExperience(event));
@@ -947,7 +951,65 @@ class EnhancedMLEngine {
     const intensity = features.reduce((sum, f) => sum + f.behavioralContext.actionIntensity, 0) / features.length;
     const frequency = Math.min(features.length / 10, 1.0);
     
-    return Math.min(intensity * frequency, 1.0);
+    // 引入数据总量作为置信度惩罚因子
+    const dataPenaltyFactor = this.calculateDataVolumePenalty();
+    
+    const baseConfidence = intensity * frequency;
+    const adjustedConfidence = baseConfidence * dataPenaltyFactor;
+    
+    return Math.min(adjustedConfidence, 1.0);
+  }
+
+  /**
+   * 计算基于数据总量的置信度惩罚因子
+   * 数据量越少，惩罚越大，置信度越低
+   */
+  private calculateDataVolumePenalty(): number {
+    const MIN_DATA_THRESHOLD = 100; // 最小数据量阈值
+    const FULL_CONFIDENCE_THRESHOLD = 1000; // 完全置信度所需的数据量
+    
+    if (this.totalEventCount >= FULL_CONFIDENCE_THRESHOLD) {
+      return 1.0; // 数据量充足，无惩罚
+    } else if (this.totalEventCount <= MIN_DATA_THRESHOLD) {
+      return 0.3; // 数据量不足，大幅惩罚
+    } else {
+      // 线性插值计算惩罚因子
+      const ratio = (this.totalEventCount - MIN_DATA_THRESHOLD) / 
+                   (FULL_CONFIDENCE_THRESHOLD - MIN_DATA_THRESHOLD);
+      return 0.3 + (0.7 * ratio); // 从0.3线性增长到1.0
+    }
+  }
+
+  /**
+   * 计算概率分布的熵（不确定性程度）
+   * 熵越高，表示模型越不确定，置信度应该越低
+   */
+  private calculateEntropy(probabilities: Float32Array): number {
+    let entropy = 0;
+    const epsilon = 1e-10; // 防止log(0)
+    
+    for (let i = 0; i < probabilities.length; i++) {
+      const p = Math.max(probabilities[i], epsilon);
+      entropy -= p * Math.log2(p);
+    }
+    
+    return entropy;
+  }
+
+  /**
+   * 基于熵值计算置信度调整因子
+   * 熵越高，调整因子越小，置信度越低
+   */
+  private calculateEntropyAdjustmentFactor(entropy: number, vocabSize: number): number {
+    // 最大熵值（均匀分布）
+    const maxEntropy = Math.log2(vocabSize);
+    
+    // 将熵标准化到[0,1]范围
+    const normalizedEntropy = Math.min(entropy / maxEntropy, 1.0);
+    
+    // 熵越高，调整因子越小
+    // 使用指数衰减函数，使高熵时置信度大幅降低
+    return Math.exp(-2 * normalizedEntropy);
   }
 
   public async predict(recentEvents: EnrichedEvent[]): Promise<{ token: string, confidence: number } | null> {
@@ -981,12 +1043,22 @@ class EnhancedMLEngine {
       
       const predictedToken = this.reverseVocabulary.get(maxIndex) || 'unknown';
       
+      // 计算预测分布的熵
+      const entropy = this.calculateEntropy(probabilities);
+      const entropyAdjustmentFactor = this.calculateEntropyAdjustmentFactor(entropy, this.vocabulary.size);
+      
+      // 应用数据总量惩罚因子
+      const dataPenaltyFactor = this.calculateDataVolumePenalty();
+      
+      // 综合应用熵调整和数据量惩罚
+      const adjustedConfidence = maxProb * entropyAdjustmentFactor * dataPenaltyFactor;
+      
       input.dispose();
       prediction.dispose();
       
       return {
         token: predictedToken,
-        confidence: maxProb
+        confidence: adjustedConfidence
       };
     } catch (error) {
       console.error('[Enhanced ML] Prediction error:', error);
@@ -1059,7 +1131,7 @@ const performanceMonitor = {
 
 // Worker message handler
 self.onmessage = async (event) => {
-  const { type, payload } = event.data;
+  const { type, data: payload, requestId } = event.data;
 
   // Phase 2.2: Handle codebook update requests (heavy K-means computation)
   if (type === 'update_codebook') {
@@ -1077,14 +1149,16 @@ self.onmessage = async (event) => {
         success: true,
         codebook: newCodebook,
         updateDuration,
-        eventsProcessed: payload.events.length
+        eventsProcessed: payload.events.length,
+        requestId
       });
     } catch (error) {
       console.error('[Enhanced ML Worker] Codebook update failed:', error);
       self.postMessage({
         type: 'codebook_updated',
         success: false,
-        error: error instanceof Error ? error.message : 'Unknown error'
+        error: error instanceof Error ? error.message : 'Unknown error',
+        requestId
       });
     }
     return;
@@ -1110,7 +1184,8 @@ self.onmessage = async (event) => {
           performanceStats: {
             averageTrainingTime: performanceMonitor.getAverageTrainingTime(),
             averagePredictionTime: performanceMonitor.getAveragePredictionTime()
-          }
+          },
+          requestId
         });
       })
       .catch((error) => {
@@ -1118,7 +1193,8 @@ self.onmessage = async (event) => {
         self.postMessage({ 
           type: 'training_complete', 
           success: false, 
-          error: error instanceof Error ? error.message : 'Unknown error'
+          error: error instanceof Error ? error.message : 'Unknown error',
+          requestId
         });
       });
   }
@@ -1133,21 +1209,23 @@ self.onmessage = async (event) => {
         
         self.postMessage({ 
           type: 'prediction_result', 
-          prediction,
+          data: prediction,
           predictionDuration,
           learningMetrics: enhancedMLEngine.getLearningMetrics(),
           performanceStats: {
             averageTrainingTime: performanceMonitor.getAverageTrainingTime(),
             averagePredictionTime: performanceMonitor.getAveragePredictionTime()
-          }
+          },
+          requestId
         });
       })
       .catch((error) => {
         console.error('[Enhanced ML Worker] Prediction failed:', error);
         self.postMessage({ 
           type: 'prediction_result', 
-          prediction: null, 
-          error: error instanceof Error ? error.message : 'Unknown error'
+          data: null, 
+          error: error instanceof Error ? error.message : 'Unknown error',
+          requestId
         });
       });
   }
@@ -1156,7 +1234,8 @@ self.onmessage = async (event) => {
     const skills = enhancedMLEngine.getSkills();
     self.postMessage({ 
       type: 'skills_result', 
-      skills 
+      data: skills,
+      requestId
     });
   }
 
@@ -1187,14 +1266,16 @@ self.onmessage = async (event) => {
         bufferUtilization: learningMetrics.bufferUtilization,
         readyForIncremental: learningMetrics.readyForIncremental,
         diversity: learningMetrics.diversity,
-        learningDuration
+        learningDuration,
+        requestId
       });
     } catch (error) {
       console.error('[Enhanced ML Worker] Incremental learning failed:', error);
       self.postMessage({
         type: 'incremental_learning_complete',
         success: false,
-        error: error instanceof Error ? error.message : 'Unknown error'
+        error: error instanceof Error ? error.message : 'Unknown error',
+        requestId
       });
     }
     return;
@@ -1206,6 +1287,7 @@ self.onmessage = async (event) => {
       skillsCount: enhancedMLEngine.getSkills().length,
       learningMetrics: enhancedMLEngine.getLearningMetrics(),
       isInitialized: true,
+      workerReady: true,
       features: {
         richContextExtraction: true,
         incrementalLearning: true,
@@ -1215,7 +1297,8 @@ self.onmessage = async (event) => {
     };
     self.postMessage({ 
       type: 'info_result', 
-      info 
+      data: { info },
+      requestId
     });
   }
 };

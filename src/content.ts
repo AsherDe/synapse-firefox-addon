@@ -54,12 +54,14 @@ declare var browser: any; // webextension-polyfill provides this globally
 
 const sendToBackground = (message: any) => {
   if (browser && browser.runtime && browser.runtime.sendMessage) {
-    try {
-      browser.runtime.sendMessage(message);
-      console.log('[Synapse] Message sent successfully');
-    } catch (e) {
-      console.warn('[Synapse] Failed to send message:', e);
-    }
+    browser.runtime.sendMessage(message, (response: any) => {
+      if (browser.runtime.lastError) {
+        console.warn('[Synapse] Failed to send message:', browser.runtime.lastError.message);
+      } else {
+        // 你可以根据需要选择是否保留这个成功的日志
+        // console.log('[Synapse] Message sent successfully, response:', response);
+      }
+    });
   } else {
     console.warn('[Synapse] Browser API not available');
   }
@@ -306,7 +308,7 @@ class TextInputAggregator {
   private inputStartTime: number = 0;
   private inputTimer: number | null = null;
   private isComposing: boolean = false;
-  private readonly INPUT_TIMEOUT = 1000; // 1秒无输入后提交
+  private readonly INPUT_TIMEOUT = 2500; // 2.5秒无输入后提交
 
   constructor() {
     this.setupEventListeners();
@@ -523,7 +525,7 @@ class EventThrottler {
   private lastEventTime: number = 0;
   private eventQueue: Array<{event: any, callback: () => void}> = [];
   private throttleTimer: number | null = null;
-  private readonly MIN_EVENT_INTERVAL = 20; // 20ms minimum between events
+  private readonly MIN_EVENT_INTERVAL = 100; // 100ms minimum between events
   private readonly MAX_QUEUE_SIZE = 30;
 
   public throttleEvent(event: any, callback: () => void): void {
@@ -686,7 +688,7 @@ function setupScrollMonitoring(): void {
         console.log('[Synapse] Scroll event skipped - conditions not met');
       }
       lastScrollTop = currentScrollTop; // Update position regardless of whether event was sent
-    }, 250); // Throttle scroll events to at most 4 times per second
+    }, 500); // Throttle scroll events to at most 2 times per second
   }, { passive: true });
 }
 
@@ -742,7 +744,7 @@ function setupMouseMoveMonitoring(): void {
           mouseTrail = []; // Reset trail after sending
         }
       }
-    }, 100); // Debounce mouse movement analysis - 降低收集频率
+    }, 300); // Debounce mouse movement analysis - 降低收集频率
   }, { passive: true });
 }
 
@@ -1068,29 +1070,47 @@ function setupPageVisibilityMonitoring(): void {
  */
 function setupMouseHoverMonitoring(): void {
   const hoverStartTimes = new Map<HTMLElement, number>();
-  
-  // Start tracking hover without throttling to ensure proper event pairing
+  // 新增一个Map来存储进入元素的定时器
+  const hoverEnterTimers = new Map<HTMLElement, number>();
+  const HOVER_START_DELAY = 50; // 50毫秒的延迟，以确认用户意图
+
+  // 优化 mouseenter 逻辑
   document.addEventListener('mouseenter', (event) => {
     const target = event.target as HTMLElement;
-    hoverStartTimes.set(target, Date.now());
-    console.log('[Synapse] Hover started:', getCssSelector(target));
+
+    // 设置一个短暂的延迟，如果鼠标很快移出则取消
+    const timer = window.setTimeout(() => {
+      hoverStartTimes.set(target, Date.now());
+      console.log('[Synapse] Hover started:', getCssSelector(target));
+      hoverEnterTimers.delete(target);
+    }, HOVER_START_DELAY);
+
+    hoverEnterTimers.set(target, timer);
   }, true);
-  
-  // Track hover duration and send event on mouseleave
+
+  // 优化 mouseleave 逻辑
   document.addEventListener('mouseleave', (event) => {
     const target = event.target as HTMLElement;
+
+    // 如果存在进入定时器，说明悬停时间不足50ms，直接取消
+    if (hoverEnterTimers.has(target)) {
+      clearTimeout(hoverEnterTimers.get(target)!);
+      hoverEnterTimers.delete(target);
+      return; // 忽略这种快速划过的事件
+    }
+
     const hoverStartTime = hoverStartTimes.get(target);
-    
+
     if (hoverStartTime) {
       const hoverDuration = Date.now() - hoverStartTime;
       hoverStartTimes.delete(target);
-      
+
       console.log('[Synapse] Hover ended:', getCssSelector(target), 'duration:', hoverDuration);
-      
-      // Only report significant hovers (>100ms)
+
+      // 仅报告超过100ms的显著悬停
       if (hoverDuration > 100) {
         const features = extractElementFeatures(target, window.location.href);
-        
+
         const hoverPayload: UserActionMouseHoverPayload = {
           selector: getCssSelector(target),
           url: generateGeneralizedURL(window.location.href),
@@ -1110,8 +1130,6 @@ function setupMouseHoverMonitoring(): void {
       } else {
         console.log('[Synapse] Hover too short, not reported:', hoverDuration + 'ms');
       }
-    } else {
-      console.log('[Synapse] No start time found for mouseout on:', getCssSelector(target));
     }
   }, true);
 }
@@ -1254,7 +1272,18 @@ function initializeSmartAssistant(): void {
       smartAssistantScript.onerror = (error) => {
         console.error('[Synapse] Failed to load smart assistant:', error);
       };
-      document.head.appendChild(smartAssistantScript);
+      if (document.head) {
+        document.head.appendChild(smartAssistantScript);
+      } else {
+        // Wait for DOM to be ready
+        if (document.readyState === 'loading') {
+          document.addEventListener('DOMContentLoaded', () => {
+            if (document.head && smartAssistantScript) {
+              document.head.appendChild(smartAssistantScript);
+            }
+          });
+        }
+      }
     } else if (!isEnabled && smartAssistantScript) {
       // Remove smart assistant if disabled
       smartAssistantScript.remove();

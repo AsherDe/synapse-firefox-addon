@@ -70,3 +70,5 @@ scripts/*.txt
 scripts/*.xlsx
 scripts/*.xls
 scripts/*.parquet
+
+package-lock.json
