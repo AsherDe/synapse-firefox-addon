@@ -4,124 +4,156 @@
     <meta charset="utf-8">
     <style>
         body {
-            width: 400px;
-            height: 500px;
+            width: 420px;
+            height: 540px;
             margin: 0;
-            padding: 16px;
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: #f8f9fa;
+            padding: 20px;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #ffffff;
+            color: #37352f;
+            line-height: 1.5;
         }
         
         .header {
-            text-align: center;
-            margin-bottom: 20px;
+            text-align: left;
+            margin-bottom: 32px;
+            border-bottom: 1px solid #e9e9e7;
+            padding-bottom: 16px;
         }
         
         .header h1 {
             margin: 0;
-            font-size: 24px;
-            color: #1a73e8;
+            font-size: 28px;
+            font-weight: 700;
+            color: #2d2d2d;
+            letter-spacing: -0.5px;
         }
         
         .header p {
-            margin: 5px 0 0 0;
-            color: #5f6368;
-            font-size: 14px;
+            margin: 8px 0 0 0;
+            color: #787774;
+            font-size: 15px;
+            font-weight: 400;
         }
         
         .controls {
             display: flex;
-            gap: 10px;
-            margin-bottom: 20px;
+            gap: 12px;
+            margin-bottom: 24px;
         }
         
         .btn {
             flex: 1;
-            padding: 8px 12px;
-            border: none;
-            border-radius: 4px;
+            padding: 10px 16px;
+            border: 1px solid #e9e9e7;
+            border-radius: 8px;
             font-size: 14px;
+            font-weight: 500;
             cursor: pointer;
-            transition: background-color 0.2s;
+            transition: all 0.15s ease;
+            background: #ffffff;
+            color: #37352f;
+        }
+        
+        .btn:hover {
+            background: #f7f7f5;
+            border-color: #d3d3d1;
+            transform: translateY(-1px);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
         }
         
         .btn-primary {
-            background: #1a73e8;
+            background: #2383e2;
             color: white;
+            border-color: #2383e2;
         }
         
         .btn-primary:hover {
-            background: #1557b0;
+            background: #1e73cc;
+            border-color: #1e73cc;
         }
         
         .btn-secondary {
-            background: #e8eaed;
-            color: #3c4043;
-        }
-        
-        .btn-secondary:hover {
-            background: #dadce0;
+            background: #ffffff;
+            color: #37352f;
+            border-color: #e9e9e7;
         }
         
         .status {
             display: flex;
             align-items: center;
-            gap: 8px;
-            margin-bottom: 15px;
-            padding: 8px 12px;
-            background: white;
-            border-radius: 4px;
-            border-left: 4px solid #34a853;
+            gap: 12px;
+            margin-bottom: 20px;
+            padding: 16px;
+            background: #f7f7f5;
+            border-radius: 12px;
+            border: 1px solid #e9e9e7;
         }
         
         .status.capturing {
-            border-left-color: #34a853;
+            background: #f0f9f0;
+            border-color: #d4e6d4;
         }
         
         .status.paused {
-            border-left-color: #ea4335;
+            background: #fdf2f0;
+            border-color: #f4c4c4;
         }
         
         .status-dot {
-            width: 8px;
-            height: 8px;
+            width: 10px;
+            height: 10px;
             border-radius: 50%;
-            background: #34a853;
+            background: #00b04f;
+            animation: pulse-green 2s infinite;
         }
         
         .status.paused .status-dot {
-            background: #ea4335;
+            background: #e74c3c;
+            animation: pulse-red 2s infinite;
+        }
+        
+        @keyframes pulse-green {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.7; transform: scale(1.1); }
+        }
+        
+        @keyframes pulse-red {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.7; transform: scale(1.1); }
         }
         
         .token-container {
-            background: white;
-            border-radius: 4px;
-            padding: 12px;
-            height: 280px;
+            background: #ffffff;
+            border-radius: 12px;
+            padding: 20px;
+            height: 300px;
             overflow-y: auto;
-            border: 1px solid #dadce0;
+            border: 1px solid #e9e9e7;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
         }
         
         .token-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 10px;
+            margin-bottom: 16px;
         }
         
         .token-header h3 {
             margin: 0;
-            font-size: 16px;
-            color: #3c4043;
+            font-size: 18px;
+            font-weight: 600;
+            color: #2d2d2d;
         }
         
         .token-count {
-            background: #e8f0fe;
-            color: #1a73e8;
-            padding: 2px 8px;
-            border-radius: 12px;
-            font-size: 12px;
-            font-weight: 500;
+            background: #e6f3ff;
+            color: #2383e2;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 13px;
+            font-weight: 600;
         }
         
         .token-list {
@@ -133,12 +165,20 @@
             display: flex;
             justify-content: space-between;
             align-items: center;
-            padding: 6px 0;
-            border-bottom: 1px solid #f1f3f4;
+            padding: 12px 0;
+            border-bottom: 1px solid #f1f1ef;
+            transition: background-color 0.15s ease;
         }
         
         .token-item:last-child {
             border-bottom: none;
+        }
+        
+        .token-item:hover {
+            background-color: #f7f7f5;
+            border-radius: 6px;
+            margin: 0 -8px;
+            padding: 12px 8px;
         }
         
         .token-info {
@@ -146,27 +186,29 @@
         }
         
         .token-id {
-            font-weight: 500;
-            color: #1a73e8;
+            font-weight: 600;
+            color: #2383e2;
             font-size: 14px;
         }
         
         .token-type {
-            font-size: 12px;
-            color: #5f6368;
-            margin-top: 2px;
+            font-size: 13px;
+            color: #787774;
+            margin-top: 4px;
         }
         
         .token-time {
-            font-size: 11px;
-            color: #9aa0a6;
+            font-size: 12px;
+            color: #9b9a97;
         }
         
         .empty-state {
             text-align: center;
-            color: #5f6368;
-            font-style: italic;
+            color: #9b9a97;
+            font-style: normal;
             margin-top: 40px;
+            font-size: 14px;
+            line-height: 1.6;
         }
         
         .sequence-display {
@@ -182,27 +224,28 @@
         }
 
         .prediction-container {
-            background: white;
-            border-radius: 4px;
-            padding: 12px;
-            margin-bottom: 15px;
-            border: 1px solid #dadce0;
+            background: #ffffff;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 20px;
+            border: 1px solid #e9e9e7;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
         }
 
         .prediction-item {
-            padding: 8px;
-            border-radius: 4px;
-            background: #f8f9fa;
+            padding: 16px;
+            border-radius: 8px;
+            background: #f7f7f5;
         }
 
         .prediction-item.recent {
-            background: #e8f5e8;
-            border-left: 3px solid #34a853;
+            background: #f0f9f0;
+            border-left: 4px solid #00b04f;
         }
 
         .prediction-item.stale {
-            background: #fef7e0;
-            border-left: 3px solid #fbbc04;
+            background: #fef8e7;
+            border-left: 4px solid #f1c40f;
         }
 
         .prediction-header {
@@ -230,11 +273,12 @@
         }
 
         .model-info {
-            background: white;
-            border-radius: 4px;
-            padding: 12px;
-            margin-bottom: 15px;
-            border: 1px solid #dadce0;
+            background: #ffffff;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 20px;
+            border: 1px solid #e9e9e7;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
         }
 
         .model-status {
@@ -372,11 +416,12 @@
         }
 
         .guidance-container {
-            background: white;
-            border-radius: 4px;
-            padding: 12px;
-            margin-bottom: 15px;
-            border: 1px solid #dadce0;
+            background: #ffffff;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 20px;
+            border: 1px solid #e9e9e7;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
         }
 
         .guidance-header {
@@ -420,8 +465,8 @@
             left: 0;
             right: 0;
             bottom: 0;
-            background-color: #ccc;
-            transition: .4s;
+            background-color: #e9e9e7;
+            transition: .3s;
             border-radius: 24px;
         }
 
@@ -433,12 +478,13 @@
             left: 3px;
             bottom: 3px;
             background-color: white;
-            transition: .4s;
+            transition: .3s;
             border-radius: 50%;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
         }
 
         input:checked + .slider {
-            background-color: #1a73e8;
+            background-color: #2383e2;
         }
 
         input:checked + .slider:before {

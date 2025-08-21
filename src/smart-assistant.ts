@@ -85,6 +85,7 @@ interface AssistantState {
   uiMode: 'high_confidence' | 'medium_confidence' | 'autofill' | 'subtle_hint'; // UI rendering mode
   pendingAutofill: AutofillSuggestion | null;
   subtleHints: SubtleHint[];
+  lastRecommendationTime: number; // 上次显示推荐的时间戳
 }
 
 interface UserFeedback {
@@ -117,7 +118,8 @@ class SmartAssistant {
       userFeedback: null,
       uiMode: 'high_confidence',
       pendingAutofill: null,
-      subtleHints: []
+      subtleHints: [],
+      lastRecommendationTime: 0
     };
     
     this.initializeConnection();
@@ -206,7 +208,13 @@ class SmartAssistant {
     
     switch (message.type) {
       case 'patternDetected':
-        this.onPatternDetected(message.data);
+        // 检查冷却时间
+        if (this.canShowRecommendation()) {
+          this.onPatternDetected(message.data);
+          this.recordRecommendationShown();
+        } else {
+          console.log('[SmartAssistant] Suggestion skipped due to cooldown period');
+        }
         break;
       case 'learnedSkills':
         this.updateLearnedPatterns(message.data);
@@ -217,6 +225,24 @@ class SmartAssistant {
       default:
         console.log('[SmartAssistant] Unknown message:', message);
     }
+  }
+
+  /**
+   * 检查是否可以显示新的推荐
+   * 实现30秒冷却期机制
+   */
+  private canShowRecommendation(): boolean {
+    const COOLDOWN_MS = 30000; // 30秒冷却期
+    const now = Date.now();
+    const timeSinceLastRecommendation = now - this.state.lastRecommendationTime;
+    return timeSinceLastRecommendation >= COOLDOWN_MS;
+  }
+
+  /**
+   * 记录推荐显示时间
+   */
+  private recordRecommendationShown(): void {
+    this.state.lastRecommendationTime = Date.now();
   }
 
   /**
@@ -248,15 +274,15 @@ class SmartAssistant {
         position: fixed;
         top: 20px;
         right: 20px;
-        width: 320px;
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        width: 340px;
+        background: #ffffff;
+        border: 1px solid #e9e9e7;
         border-radius: 12px;
-        box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+        box-shadow: 0 4px 24px rgba(0, 0, 0, 0.1);
         z-index: 10000;
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-        color: white;
-        backdrop-filter: blur(10px);
-        transform: translateX(350px);
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        color: #37352f;
+        transform: translateX(360px);
         transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
       }
       
@@ -265,8 +291,8 @@ class SmartAssistant {
       }
       
       .assistant-header {
-        padding: 16px 20px 12px;
-        border-bottom: 1px solid rgba(255,255,255,0.2);
+        padding: 20px 20px 16px;
+        border-bottom: 1px solid #f1f1ef;
         display: flex;
         align-items: center;
         justify-content: space-between;
@@ -274,70 +300,73 @@ class SmartAssistant {
       
       .assistant-title {
         font-weight: 600;
-        font-size: 16px;
+        font-size: 18px;
         margin: 0;
         display: flex;
         align-items: center;
-        gap: 8px;
+        gap: 10px;
+        color: #2d2d2d;
       }
       
       .assistant-icon {
-        width: 20px;
-        height: 20px;
-        background: rgba(255,255,255,0.3);
-        border-radius: 50%;
+        width: 24px;
+        height: 24px;
+        background: #f7f7f5;
+        border: 1px solid #e9e9e7;
+        border-radius: 8px;
         display: flex;
         align-items: center;
         justify-content: center;
-        font-size: 12px;
+        font-size: 14px;
       }
       
       .close-btn {
         background: none;
         border: none;
-        color: white;
+        color: #9b9a97;
         cursor: pointer;
-        font-size: 18px;
-        padding: 4px;
-        border-radius: 4px;
-        opacity: 0.7;
-        transition: opacity 0.2s;
+        font-size: 20px;
+        padding: 8px;
+        border-radius: 6px;
+        transition: all 0.15s;
       }
       
       .close-btn:hover {
-        opacity: 1;
+        color: #37352f;
+        background: #f7f7f5;
       }
       
       .assistant-content {
-        padding: 16px 20px;
+        padding: 20px;
       }
       
       .assistant-header.high-confidence {
-        background: linear-gradient(135deg, #4caf50 0%, #45a049 100%);
+        background: #f7f7f5;
+        border-bottom: 1px solid #e9e9e7;
       }
       
       .suggestion-card.high-confidence {
-        border: 2px solid rgba(76, 175, 80, 0.5);
-        background: rgba(76, 175, 80, 0.1);
+        border: 1px solid #e6f3ff;
+        background: #f9fcff;
       }
       
       .confidence-badge.high {
-        background: rgba(76, 175, 80, 0.3);
-        color: white;
+        background: #e6f3ff;
+        color: #2383e2;
         font-weight: 600;
       }
       
       .btn-primary.one-click {
-        background: linear-gradient(135deg, #4caf50 0%, #45a049 100%);
+        background: #2383e2;
+        color: white;
         font-weight: 600;
-        transform: scale(1.05);
-        animation: pulse 2s infinite;
+        box-shadow: 0 2px 8px rgba(35, 131, 226, 0.2);
       }
       
-      @keyframes pulse {
-        0% { box-shadow: 0 0 0 0 rgba(76, 175, 80, 0.7); }
-        70% { box-shadow: 0 0 0 10px rgba(76, 175, 80, 0); }
-        100% { box-shadow: 0 0 0 0 rgba(76, 175, 80, 0); }
+      .btn-primary.one-click:hover {
+        background: #1e73cc;
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(35, 131, 226, 0.3);
       }
       
       .subtle-hint {
@@ -406,78 +435,87 @@ class SmartAssistant {
       }
       
       .suggestion-card {
-        background: rgba(255,255,255,0.1);
+        background: #ffffff;
+        border: 1px solid #f1f1ef;
         border-radius: 8px;
-        padding: 16px;
-        margin-bottom: 12px;
+        padding: 20px;
+        margin-bottom: 16px;
       }
       
       .suggestion-title {
         font-weight: 600;
-        font-size: 14px;
+        font-size: 16px;
         margin-bottom: 8px;
+        color: #2d2d2d;
       }
       
       .suggestion-description {
-        font-size: 13px;
-        opacity: 0.9;
-        margin-bottom: 12px;
-        line-height: 1.4;
+        font-size: 14px;
+        color: #787774;
+        margin-bottom: 16px;
+        line-height: 1.5;
       }
       
       .suggestion-meta {
         display: flex;
         justify-content: space-between;
-        font-size: 11px;
-        opacity: 0.7;
-        margin-bottom: 16px;
+        font-size: 12px;
+        color: #9b9a97;
+        margin-bottom: 20px;
       }
       
       .confidence-badge {
-        background: rgba(255,255,255,0.2);
-        padding: 2px 8px;
+        background: #f7f7f5;
+        color: #37352f;
+        padding: 4px 12px;
         border-radius: 12px;
-        font-size: 10px;
-        font-weight: 500;
+        font-size: 11px;
+        font-weight: 600;
+        border: 1px solid #e9e9e7;
       }
       
       .action-buttons {
         display: flex;
-        gap: 8px;
+        gap: 12px;
       }
       
       .btn-primary {
-        background: rgba(255,255,255,0.2);
+        background: #2383e2;
         border: none;
         color: white;
-        padding: 8px 16px;
-        border-radius: 6px;
+        padding: 12px 20px;
+        border-radius: 8px;
         cursor: pointer;
-        font-size: 12px;
-        font-weight: 500;
-        transition: all 0.2s;
+        font-size: 14px;
+        font-weight: 600;
+        transition: all 0.15s;
         flex: 1;
+        box-shadow: 0 2px 4px rgba(35, 131, 226, 0.2);
       }
       
       .btn-primary:hover {
-        background: rgba(255,255,255,0.3);
+        background: #1e73cc;
         transform: translateY(-1px);
+        box-shadow: 0 4px 8px rgba(35, 131, 226, 0.3);
       }
       
       .btn-secondary {
-        background: transparent;
-        border: 1px solid rgba(255,255,255,0.3);
-        color: white;
-        padding: 8px 16px;
-        border-radius: 6px;
+        background: #ffffff;
+        border: 1px solid #e9e9e7;
+        color: #37352f;
+        padding: 12px 20px;
+        border-radius: 8px;
         cursor: pointer;
-        font-size: 12px;
+        font-size: 14px;
         font-weight: 500;
-        transition: all 0.2s;
+        transition: all 0.15s;
+        flex: 1;
       }
       
       .btn-secondary:hover {
-        background: rgba(255,255,255,0.1);
+        background: #f7f7f5;
+        border-color: #d3d3d1;
+        transform: translateY(-1px);
       }
       
       .execution-progress {
@@ -748,7 +786,7 @@ class SmartAssistant {
             <span class="assistant-icon">⚡</span>
             Quick Action
           </h3>
-          <button class="close-btn" onclick="synapseAssistant.hideAssistant()">×</button>
+          <button class="close-btn" data-action="close">×</button>
         </div>
         <div class="assistant-content">
           <div class="suggestion-card high-confidence">
@@ -759,10 +797,10 @@ class SmartAssistant {
               <span class="confidence-badge high">${(suggestion.confidence * 100).toFixed(0)}%</span>
             </div>
             <div class="action-buttons">
-              <button class="btn-primary one-click" onclick="synapseAssistant.executeActionsWithConfirmation()">
+              <button class="btn-primary one-click" data-action="execute-quick">
                 ⚡ Execute Now
               </button>
-              <button class="btn-secondary" onclick="synapseAssistant.rejectSuggestion()">
+              <button class="btn-secondary" data-action="reject">
                 Not Now
               </button>
             </div>
@@ -779,7 +817,7 @@ class SmartAssistant {
             <span class="assistant-icon">🤖</span>
             Smart Assistant
           </h3>
-          <button class="close-btn" onclick="synapseAssistant.hideAssistant()">×</button>
+          <button class="close-btn" data-action="close">×</button>
         </div>
         <div class="assistant-content">
           <div class="suggestion-card">
@@ -790,10 +828,10 @@ class SmartAssistant {
               <span class="confidence-badge">Confidence: ${(suggestion.confidence * 100).toFixed(0)}%</span>
             </div>
             <div class="action-buttons">
-              <button class="btn-primary" onclick="synapseAssistant.executeActions()">
+              <button class="btn-primary" data-action="execute">
                 Execute
               </button>
-              <button class="btn-secondary" onclick="synapseAssistant.rejectSuggestion()">
+              <button class="btn-secondary" data-action="reject">
                 Not Now
               </button>
             </div>
@@ -803,6 +841,76 @@ class SmartAssistant {
           ${this.renderRollbackPanel()}
         </div>
       `;
+    }
+    
+    // 添加事件监听器
+    this.attachEventListeners();
+  }
+
+  /**
+   * 添加事件监听器到按钮
+   */
+  private attachEventListeners(): void {
+    if (!this.assistantElement) return;
+
+    // 使用事件委托处理所有按钮点击
+    this.assistantElement.addEventListener('click', (event: MouseEvent) => {
+      const target = event.target as HTMLElement;
+      const action = target.getAttribute('data-action');
+      
+      if (!action) return;
+      
+      event.preventDefault();
+      event.stopPropagation();
+      
+      switch (action) {
+        case 'close':
+          this.hideAssistant();
+          break;
+        case 'execute':
+          this.executeActions();
+          break;
+        case 'execute-quick':
+          this.executeActionsWithConfirmation();
+          break;
+        case 'reject':
+          this.rejectSuggestion();
+          break;
+        case 'submit-feedback':
+          this.submitFeedback();
+          break;
+        case 'rollback':
+          this.rollbackActions();
+          break;
+        case 'execute-autofill':
+          this.executeAutofill();
+          break;
+        case 'dismiss-autofill':
+          this.dismissAutofill();
+          break;
+        default:
+          console.log('[SmartAssistant] Unknown action:', action);
+      }
+    });
+
+    // 处理评分星星点击
+    this.assistantElement.addEventListener('click', (event: MouseEvent) => {
+      const target = event.target as HTMLElement;
+      if (target.classList.contains('star')) {
+        const rating = parseInt(target.getAttribute('data-rating') || '0');
+        if (rating > 0) {
+          this.setRating(rating);
+        }
+      }
+    });
+
+    // 处理评论文本框变化
+    const commentTextarea = this.assistantElement.querySelector('.feedback-comment') as HTMLTextAreaElement;
+    if (commentTextarea) {
+      commentTextarea.addEventListener('change', (event: Event) => {
+        const target = event.target as HTMLTextAreaElement;
+        this.setComment(target.value);
+      });
     }
   }
 
@@ -837,17 +945,16 @@ class SmartAssistant {
         <div class="feedback-title">How was this suggestion?</div>
         <div class="rating-stars">
           ${[1,2,3,4,5].map(rating => 
-            `<span class="star" onclick="synapseAssistant.setRating(${rating})">⭐</span>`
+            `<span class="star" data-rating="${rating}">⭐</span>`
           ).join('')}
         </div>
         <textarea 
           class="feedback-comment" 
           placeholder="Tell me how this suggestion could be improved..."
-          onchange="synapseAssistant.setComment(this.value)"
         ></textarea>
         <div class="action-buttons" style="margin-top: 8px;">
-          <button class="btn-primary" onclick="synapseAssistant.submitFeedback()">Confirm & Rate</button>
-          <button class="btn-secondary" onclick="synapseAssistant.rollbackActions()">Undo & Improve</button>
+          <button class="btn-primary" data-action="submit-feedback">Confirm & Rate</button>
+          <button class="btn-secondary" data-action="rollback">Undo & Improve</button>
         </div>
       </div>
     `;
@@ -864,7 +971,7 @@ class SmartAssistant {
         <div class="rollback-title">Need to undo?</div>
         <div>If the suggestion didn't work as expected, you can rollback all actions and help me learn from your actual behavior.</div>
         <div class="action-buttons" style="margin-top: 8px;">
-          <button class="btn-secondary" onclick="synapseAssistant.rollbackActions()">Rollback & Learn</button>
+          <button class="btn-secondary" data-action="rollback">Rollback & Learn</button>
         </div>
       </div>
     `;
@@ -1188,12 +1295,24 @@ class SmartAssistant {
         <div><strong>Auto-fill suggestion:</strong></div>
         <div style="margin: 4px 0; font-weight: 500;">${autofill.value}</div>
         <div class="autofill-buttons">
-          <button class="autofill-btn" onclick="synapseAssistant.executeAutofill()">Fill All</button>
-          <button class="autofill-btn" onclick="synapseAssistant.dismissAutofill()">Dismiss</button>
+          <button class="autofill-btn" data-action="execute-autofill">Fill All</button>
+          <button class="autofill-btn" data-action="dismiss-autofill">Dismiss</button>
         </div>
       `;
       
       document.body.appendChild(popup);
+      
+      // 添加事件监听器
+      popup.addEventListener('click', (event: MouseEvent) => {
+        const target = event.target as HTMLElement;
+        const action = target.getAttribute('data-action');
+        
+        if (action === 'execute-autofill') {
+          this.executeAutofill();
+        } else if (action === 'dismiss-autofill') {
+          this.dismissAutofill();
+        }
+      });
       
       // Auto-dismiss after 10 seconds
       setTimeout(() => {
@@ -1238,6 +1357,36 @@ class SmartAssistant {
       popup.remove();
     }
     this.state.pendingAutofill = null;
+  }
+
+  /**
+   * Set user rating
+   */
+  public setRating(rating: number): void {
+    if (!this.state.userFeedback) {
+      this.state.userFeedback = { type: 'accept' };
+    }
+    this.state.userFeedback.rating = rating;
+    
+    // Update star display
+    const stars = this.assistantElement?.querySelectorAll('.star');
+    stars?.forEach((star, index) => {
+      if (index < rating) {
+        star.classList.add('active');
+      } else {
+        star.classList.remove('active');
+      }
+    });
+  }
+
+  /**
+   * Set user comment
+   */
+  public setComment(comment: string): void {
+    if (!this.state.userFeedback) {
+      this.state.userFeedback = { type: 'accept' };
+    }
+    this.state.userFeedback.comment = comment;
   }
 
   /**

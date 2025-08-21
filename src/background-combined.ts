@@ -393,6 +393,31 @@ let isPaused = false;
 let isUserInTestGroup = false;
 let abTestInitialized = false;
 
+// 推荐冷却期管理
+let lastRecommendationTime = 0;
+const RECOMMENDATION_COOLDOWN_MS = 30000; // 30秒冷却期
+
+// 分级推荐置信度阈值
+const CONFIDENCE_THRESHOLD_NORMAL = 0.7; // 70% - 普通推荐
+const CONFIDENCE_THRESHOLD_HIGH = 0.9;   // 90% - 高置信度推荐
+
+/**
+ * 检查是否可以显示新的推荐
+ * 实现30秒冷却期机制
+ */
+function canShowRecommendation(): boolean {
+  const now = Date.now();
+  const timeSinceLastRecommendation = now - lastRecommendationTime;
+  return timeSinceLastRecommendation >= RECOMMENDATION_COOLDOWN_MS;
+}
+
+/**
+ * 记录推荐显示时间
+ */
+function recordRecommendationShown(): void {
+  lastRecommendationTime = Date.now();
+}
+
 // IndexedDB Manager initialization
 let dbManager: any = null;
 
@@ -1033,14 +1058,24 @@ async function handleMLOperations(currentSequence: GlobalActionSequence): Promis
         console.log(`[Synapse] Detected skill pattern: ${matchedSkill.name} (confidence: ${(matchedSkill.confidence * 100).toFixed(1)}%)`);
         
         // A/B Test: Show intelligent predictions to test group users
-        if (abTestInitialized && isUserInTestGroup && matchedSkill.confidence > 0.7) {
+        if (abTestInitialized && isUserInTestGroup && matchedSkill.confidence >= CONFIDENCE_THRESHOLD_NORMAL && canShowRecommendation()) {
           try {
+            // 根据置信度级别设置不同的推荐样式
+            const isHighConfidence = matchedSkill.confidence >= CONFIDENCE_THRESHOLD_HIGH;
+            const title = isHighConfidence ? 'Synapse Smart Prediction ⭐' : 'Synapse Smart Prediction';
+            const message = isHighConfidence 
+              ? `Highly confident you are performing: ${matchedSkill.name}. Continue?`
+              : `Detected you might be performing: ${matchedSkill.name}. Need assistance?`;
+            
             browser.notifications.create(`synapse_prediction_${Date.now()}`, {
               type: 'basic',
               iconUrl: 'icons/icon-48.png',
-              title: 'Synapse 智能预测',
-              message: `检测到您可能正在执行: ${matchedSkill.name}. 需要我帮您继续吗?`
+              title: title,
+              message: message
             });
+            
+            // 记录推荐显示时间，启动冷却期
+            recordRecommendationShown();
             
             // Record this prediction event for analysis
             const predictionEvent = {
@@ -1089,8 +1124,9 @@ async function handleMLOperations(currentSequence: GlobalActionSequence): Promis
             console.log(`[Synapse] Local ML prediction: ${advancedPrediction.token} (confidence: ${(advancedPrediction.confidence * 100).toFixed(1)}%)`);
             
             // Send high confidence predictions as suggestions
-            if (advancedPrediction.confidence > 0.7) {
+            if (advancedPrediction.confidence >= CONFIDENCE_THRESHOLD_NORMAL && canShowRecommendation()) {
               await sendPatternDetectedSuggestion(advancedPrediction);
+              recordRecommendationShown();
             }
             
             // Store advanced prediction
@@ -1121,8 +1157,9 @@ async function handleMLOperations(currentSequence: GlobalActionSequence): Promis
           console.log(`[Synapse] Simple prediction: token ${simplePrediction.tokenId} (confidence: ${(simplePrediction.confidence * 100).toFixed(1)}%)`);
           
           // Send high confidence predictions as suggestions
-          if (simplePrediction.confidence > 0.8) {
+          if (simplePrediction.confidence >= CONFIDENCE_THRESHOLD_HIGH && canShowRecommendation()) {
             await sendPatternDetectedSuggestion(simplePrediction, 'simple');
+            recordRecommendationShown();
           }
           
           // Store simple prediction
@@ -1945,12 +1982,14 @@ async function sendPatternDetectedSuggestion(prediction: any, type: string = 'ad
     const activeTab = tabs[0];
     
     // Create suggestion based on prediction
+    const isHighConfidence = prediction.confidence >= CONFIDENCE_THRESHOLD_HIGH;
     const suggestion = {
       id: `suggestion_${Date.now()}`,
-      title: generateSuggestionTitle(prediction, type),
-      description: generateSuggestionDescription(prediction, type),
+      title: generateSuggestionTitle(prediction, type, isHighConfidence),
+      description: generateSuggestionDescription(prediction, type, isHighConfidence),
       confidence: prediction.confidence,
       actionType: determineSuggestedAction(prediction, type),
+      confidenceLevel: isHighConfidence ? 'high' : 'normal',
       timestamp: Date.now()
     };
     
@@ -1969,25 +2008,29 @@ async function sendPatternDetectedSuggestion(prediction: any, type: string = 'ad
 /**
  * Generate human-readable suggestion title
  */
-function generateSuggestionTitle(prediction: any, type: string): string {
+function generateSuggestionTitle(prediction: any, type: string, isHighConfidence: boolean = false): string {
+  const prefix = isHighConfidence ? '⭐ ' : '';
+  
   if (type === 'simple') {
-    return `Continue with action ${prediction.tokenId}`;
+    return `${prefix}Continue with action ${prediction.tokenId}`;
   } else {
     // Advanced prediction
     const token = prediction.token || 'unknown';
-    return `Suggested next action: ${token}`;
+    return `${prefix}Suggested next action: ${token}`;
   }
 }
 
 /**
  * Generate suggestion description
  */
-function generateSuggestionDescription(prediction: any, type: string): string {
+function generateSuggestionDescription(prediction: any, type: string, isHighConfidence: boolean = false): string {
   const confidence = Math.round(prediction.confidence * 100);
+  const confidenceText = isHighConfidence ? 'High confidence' : 'Moderate confidence';
+  
   if (type === 'simple') {
-    return `Based on your recent actions, you might want to perform action ${prediction.tokenId} (${confidence}% confidence)`;
+    return `${confidenceText}: Based on your recent actions, you might want to perform action ${prediction.tokenId} (${confidence}%)`;
   } else {
-    return `AI suggests: ${prediction.token} with ${confidence}% confidence`;
+    return `${confidenceText}: AI suggests ${prediction.token} (${confidence}%)`;
   }
 }
 
