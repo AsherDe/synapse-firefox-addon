@@ -11,13 +11,9 @@ class PopupController {
 
   constructor() {
     this.setupBackgroundConnection();
-    this.loadSequence();
-    this.loadPrediction();
-    this.loadModelInfo();
-    this.loadPauseState();
-    this.loadGuidanceState();
+    this.loadGuidanceState(); // Keep this as it uses browser.storage directly
     this.setupEventListeners();
-    // No longer using periodic updates - using real-time connection instead
+    // All other data now loaded via background connection
   }
 
   /**
@@ -64,20 +60,45 @@ class PopupController {
         this.updateSequenceDisplay();
         break;
         
+      case 'eventAdded':
+        // Handle single event addition
+        if (message.data) {
+          this.sequence.push(message.data);
+          this.updateSequenceDisplay();
+        }
+        break;
+        
+      case 'sequenceCleared':
+        this.sequence = [];
+        this.updateSequenceDisplay();
+        break;
+        
       case 'predictionUpdate':
         this.updatePredictionDisplay(message.data.prediction);
         break;
         
       case 'modelInfoUpdate':
-        this.updateModelInfoDisplay(message.data, message.data.isReady);
+        // [关键修改] 直接使用收到的数据对象
+        this.updateModelInfoDisplay(message.data, message.data.isReady || message.data.workerReady);
         break;
         
-      case 'pauseStateUpdate':
-        this.updatePauseUI(message.data.isPaused);
+      case 'pauseStateChanged':
+        this.updatePauseUI(message.data);
+        break;
+        
+      case 'dataReset':
+        this.sequence = [];
+        this.updateSequenceDisplay();
+        this.updatePredictionDisplay(null);
+        break;
+        
+      case 'dataCleared':
+        this.sequence = [];
+        this.updateSequenceDisplay();
         break;
         
       case 'initialData':
-        // Handle initial data load
+        console.log('[Popup] Received initial data:', message.data);
         if (message.data.sequence) {
           this.sequence = message.data.sequence;
           this.updateSequenceDisplay();
@@ -85,11 +106,13 @@ class PopupController {
         if (message.data.prediction) {
           this.updatePredictionDisplay(message.data.prediction);
         }
+        // [关键修改] 正确处理初始模型信息
         if (message.data.modelInfo) {
-          this.updateModelInfoDisplay(message.data.modelInfo, message.data.isReady);
+          const isReady = message.data.modelInfo.isReady || message.data.modelInfo.workerReady;
+          this.updateModelInfoDisplay(message.data.modelInfo, isReady);
         }
-        if (message.data.pauseState !== undefined) {
-          this.updatePauseUI(message.data.pauseState);
+        if (message.data.paused !== undefined) {
+          this.updatePauseUI(message.data.paused);
         }
         break;
         
@@ -202,18 +225,6 @@ class PopupController {
       });
   }
 
-  private loadSequence(): void {
-    this.sendToBackground({ type: 'getSequence' })
-      .then((response: any) => {
-        if (response && response.sequence) {
-          this.sequence = response.sequence;
-          this.updateSequenceDisplay();
-        }
-      })
-      .catch((error) => {
-        console.error('Failed to load sequence:', error);
-      });
-  }
 
   private loadPrediction(): void {
     browser.runtime.sendMessage({ type: 'getPrediction' }, (response: any) => {
@@ -447,11 +458,10 @@ class PopupController {
     const modelElement = document.getElementById('modelInfo');
     if (!modelElement) return;
 
-    // 根据 isReady 状态更新 UI
     const status = isReady ? 'ready' : (modelInfo?.workerStatus || 'loading');
     const statusText = isReady ? 'Model Ready' : `Model Status: ${status}...`;
 
-    if (!isReady) {
+    if (!isReady || !modelInfo) {
       modelElement.innerHTML = `
         <div class="model-status">
           <div class="status-indicator loading"></div>
@@ -461,15 +471,18 @@ class PopupController {
       return;
     }
     
-    // 成功加载后显示详细信息
+    // [最终修复] 数据现在嵌套在 modelInfo.info 中
+    const details = modelInfo.info || modelInfo;
+
     modelElement.innerHTML = `
       <div class="model-status">
         <div class="status-indicator ready"></div>
         <span>Model Ready</span>
       </div>
       <div class="model-details">
-        <div class="model-param">Vocab Size: ${modelInfo.vocabSize || 'N/A'}</div>
-        <div class="model-param">Sequence Length: ${modelInfo.sequenceLength || 'N/A'}</div>
+        <div class="model-param">Vocab Size: ${details.vocabSize || 'N/A'}</div>
+        <div class="model-param">Sequence Length: ${details.sequenceLength || 'N/A'}</div>
+        <div class="model-param">ML Worker: ${details.workerReady ? 'Active' : 'Inactive'}</div>
       </div>
     `;
   }
@@ -742,20 +755,39 @@ class PopupController {
   }
 
   private async getModelInfoData(): Promise<any> {
-    return new Promise((resolve) => {
-      browser.runtime.sendMessage({ type: 'getModelInfo' }, (response: any) => {
-        browser.runtime.sendMessage({ type: 'getCodebookInfo' }, (codebookResponse: any) => {
-          browser.runtime.sendMessage({ type: 'getPrediction' }, (predictionResponse: any) => {
-            resolve({
-              modelInfo: response?.success ? response.data : response?.modelInfo,
-              isReady: response?.success ? (response.data ? true : false) : response?.isReady,
-              codebookInfo: codebookResponse?.success ? codebookResponse.data : codebookResponse?.codebookInfo,
-              lastPrediction: predictionResponse?.success ? predictionResponse.data : predictionResponse?.prediction
-            });
+    try {
+      // 使用 Promise.all 并行发送三个请求，提高效率
+      const [modelResponse, codebookResponse, predictionResponse] = await Promise.all([
+        new Promise((resolve) => {
+          browser.runtime.sendMessage({ type: 'getModelInfo' }, (response: any) => {
+            console.log('[Popup] getModelInfo response:', response);
+            resolve(response);
           });
-        });
-      });
-    });
+        }),
+        new Promise((resolve) => {
+          browser.runtime.sendMessage({ type: 'getCodebookInfo' }, (response: any) => {
+            console.log('[Popup] getCodebookInfo response:', response);
+            resolve(response);
+          });
+        }),
+        new Promise((resolve) => {
+          browser.runtime.sendMessage({ type: 'getPrediction' }, (response: any) => {
+            console.log('[Popup] getPrediction response:', response);
+            resolve(response);
+          });
+        })
+      ]);
+
+      return {
+        modelInfo: (modelResponse as any)?.success ? (modelResponse as any).data : (modelResponse as any)?.modelInfo,
+        isReady: (modelResponse as any)?.success ? ((modelResponse as any).data ? true : false) : (modelResponse as any)?.isReady,
+        codebookInfo: (codebookResponse as any)?.success ? (codebookResponse as any).data : (codebookResponse as any)?.codebookInfo,
+        lastPrediction: (predictionResponse as any)?.success ? (predictionResponse as any).data : (predictionResponse as any)?.prediction
+      };
+    } catch (error) {
+      console.error('[Popup] Error in getModelInfoData:', error);
+      throw error;
+    }
   }
 
   private showExportMessage(message: string, type: 'success' | 'error'): void {

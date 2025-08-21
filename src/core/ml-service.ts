@@ -80,19 +80,50 @@ export class MLService {
     switch (message.type) {
       case 'worker_ready':
         this.stateManager.set('mlWorkerStatus', 'ready');
+        // [关键修复] 当 worker 就绪时，立即获取其详细信息
+        // 并将其作为一个完整的对象存入状态管理器，以便广播
+        this.getModelInfoWithRetry().then(infoResponse => {
+          if (infoResponse && infoResponse.info) {
+            const modelInfoData = {
+              info: infoResponse.info,
+              isReady: true,
+              workerReady: true,
+              workerStatus: 'ready'
+            };
+            this.stateManager.set('fullModelInfo', modelInfoData);
+            console.log('[MLService] Full model info cached:', modelInfoData);
+          }
+        }).catch(err => {
+          console.error('[MLService] Failed to get model info after worker ready:', err);
+        });
         break;
         
-      case 'model_trained':
+      case 'training_complete':
         this.stateManager.set('modelLastTrained', Date.now());
         this.stateManager.set('modelTrainingStatus', 'completed');
+        console.log('[MLService] Training completed successfully');
         break;
         
-      case 'prediction_ready':
+      case 'prediction_result':
         this.stateManager.set('lastPrediction', message.data);
+        console.log('[MLService] Prediction result received');
         break;
         
-      case 'skills_updated':
+      case 'skills_result':
         this.stateManager.set('skillsLastUpdated', Date.now());
+        console.log('[MLService] Skills updated');
+        break;
+        
+      case 'info_result':
+        console.log('[MLService] Model info received');
+        break;
+        
+      case 'codebook_updated':
+        console.log('[MLService] Codebook updated');
+        break;
+        
+      case 'incremental_learning_complete':
+        console.log('[MLService] Incremental learning completed');
         break;
         
       default:
@@ -134,7 +165,7 @@ export class MLService {
       const sequence = await this.dataStorage.getSequence('globalActionSequence');
       
       await this.sendToWorker({
-        type: 'trainModel',
+        type: 'train',
         data: { sequence }
       });
       
@@ -150,8 +181,13 @@ export class MLService {
    */
   async getPrediction(): Promise<any> {
     try {
+      // Get recent sequence for prediction
+      const sequence = await this.dataStorage.getSequence('globalActionSequence');
+      const currentSequence = sequence.slice(-10); // Get last 10 events for prediction
+      
       const result = await this.sendToWorker({
-        type: 'getPrediction'
+        type: 'predict',
+        data: { currentSequence }
       });
       
       this.stateManager.set('lastPrediction', result);
@@ -169,10 +205,48 @@ export class MLService {
   async getModelInfo(): Promise<any> {
     try {
       return await this.sendToWorker({
-        type: 'getModelInfo'
+        type: 'getInfo'
       });
     } catch (error) {
       console.error('[MLService] Failed to get model info:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get model information with retry mechanism
+   */
+  async getModelInfoWithRetry(maxRetries: number = 3, delay: number = 1000): Promise<any> {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        console.log(`[MLService] Getting model info (attempt ${attempt}/${maxRetries})`);
+        const result = await this.getModelInfo();
+        console.log('[MLService] Model info retrieved successfully:', result);
+        return result;
+      } catch (error) {
+        console.error(`[MLService] Model info retrieval attempt ${attempt} failed:`, error);
+        
+        if (attempt < maxRetries) {
+          console.log(`[MLService] Retrying in ${delay}ms...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          delay *= 1.5; // Exponential backoff
+        } else {
+          throw error;
+        }
+      }
+    }
+  }
+
+  /**
+   * Get learned skills
+   */
+  async getSkills(): Promise<any[]> {
+    try {
+      return await this.sendToWorker({
+        type: 'getSkills'
+      });
+    } catch (error) {
+      console.error('[MLService] Failed to get skills:', error);
       throw error;
     }
   }
@@ -192,18 +266,12 @@ export class MLService {
     }
   }
 
+
   /**
-   * Get current skills
+   * Get current worker status
    */
-  async getSkills(): Promise<any> {
-    try {
-      return await this.sendToWorker({
-        type: 'getSkills'
-      });
-    } catch (error) {
-      console.error('[MLService] Failed to get skills:', error);
-      throw error;
-    }
+  getWorkerStatus(): string {
+    return this.stateManager.get('mlWorkerStatus') || 'initializing';
   }
 
   /**
@@ -239,12 +307,6 @@ export class MLService {
     }
   }
 
-  /**
-   * Get the current status of the ML worker
-   */
-  getWorkerStatus(): string {
-    return this.stateManager.get('mlWorkerStatus') || 'unknown';
-  }
 
   /**
    * Restart the ML worker

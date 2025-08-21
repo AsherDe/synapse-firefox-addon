@@ -36,9 +36,6 @@ async function initializeServices(): Promise<void> {
     console.log('[SYNAPSE BACKGROUND] Creating DataStorage...');
     dataStorage = new DataStorage(stateManager);
     
-    console.log('[SYNAPSE BACKGROUND] Creating MLService...');
-    mlService = new MLService(stateManager, dataStorage);
-    
     console.log('[SYNAPSE BACKGROUND] Creating MessageRouter...');
     messageRouter = new MessageRouter();
     
@@ -51,13 +48,22 @@ async function initializeServices(): Promise<void> {
     stateManager.markAsPersistent('extensionPaused');
     stateManager.markAsPersistent('globalActionSequence');
     
-    // [关键新增] 监听核心状态的变化，并广播给popup
+    // [关键修改] 在MLService创建之前设置状态监听器
     stateManager.addListener('mlWorkerStatus', (key, newValue) => {
       console.log(`[Background] State changed: ${key} = ${newValue}. Broadcasting to popup.`);
       messageRouter.broadcast('popup', {
         type: 'modelInfoUpdate', // 复用现有的消息类型
         data: { workerStatus: newValue, isReady: newValue === 'ready' }
       });
+    });
+
+    // [新增] 监听 fullModelInfo 的变化，并向所有弹窗广播
+    stateManager.addListener('fullModelInfo', (key, newValue) => {
+        console.log(`[Background] Broadcasting updated model info:`, newValue);
+        messageRouter.broadcast('popup', {
+            type: 'modelInfoUpdate',
+            data: newValue // 直接广播整个数据对象
+        });
     });
 
     stateManager.addListener('globalActionSequence', (_, newValue) => {
@@ -67,6 +73,10 @@ async function initializeServices(): Promise<void> {
             data: { sequence: newValue }
         });
     });
+    
+    // MLService放在最后创建，确保状态监听器已经设置好
+    console.log('[SYNAPSE BACKGROUND] Creating MLService...');
+    mlService = new MLService(stateManager, dataStorage);
     
     console.log('[SYNAPSE BACKGROUND] ===== SERVICES INITIALIZED SUCCESSFULLY =====');
     
@@ -433,15 +443,37 @@ async function sendInitialDataToPopup(port: any): Promise<void> {
   try {
     const sequence = await dataStorage.getSequence('globalActionSequence');
     const pauseState = stateManager.get('extensionPaused') || false;
-    const workerStatus = mlService.getWorkerStatus();
-    
+    // [关键修改] 直接从状态管理器获取缓存好的完整模型信息
+    let modelInfo = stateManager.get('fullModelInfo');
+
+    // If model info is not cached yet, try to get it from MLService
+    if (!modelInfo && mlService) {
+      console.log('[Background] Model info not cached, attempting to retrieve...');
+      try {
+        const freshModelInfo = await mlService.getModelInfo();
+        if (freshModelInfo && freshModelInfo.info) {
+          modelInfo = {
+            info: freshModelInfo.info,
+            isReady: true,
+            workerReady: true,
+            workerStatus: 'ready'
+          };
+          // Cache it for future requests
+          stateManager.set('fullModelInfo', modelInfo);
+          console.log('[Background] Fresh model info retrieved and cached:', modelInfo);
+        }
+      } catch (error) {
+        console.warn('[Background] Failed to retrieve fresh model info:', error);
+      }
+    }
+
     port.postMessage({
       type: 'initialData',
       data: {
-        sequence: sequence.slice(-100), // Send last 100 events
-        totalEvents: sequence.length,
+        sequence: sequence.slice(-100),
         paused: pauseState,
-        workerStatus,
+        // 如果 modelInfo 存在，则直接发送；否则发送一个 loading 状态
+        modelInfo: modelInfo || { workerStatus: 'loading', isReady: false },
         timestamp: Date.now()
       }
     });

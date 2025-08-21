@@ -21,7 +21,7 @@
   
   "background": {
     "scripts": ["dist/browser-polyfill.min.js", "dist/background.js"],
-    "persistent": true
+    "persistent": false
   },
   
   "content_scripts": [

@@ -1131,7 +1131,7 @@ const performanceMonitor = {
 
 // Worker message handler
 self.onmessage = async (event) => {
-  const { type, payload } = event.data;
+  const { type, data: payload, requestId } = event.data;
 
   // Phase 2.2: Handle codebook update requests (heavy K-means computation)
   if (type === 'update_codebook') {
@@ -1149,14 +1149,16 @@ self.onmessage = async (event) => {
         success: true,
         codebook: newCodebook,
         updateDuration,
-        eventsProcessed: payload.events.length
+        eventsProcessed: payload.events.length,
+        requestId
       });
     } catch (error) {
       console.error('[Enhanced ML Worker] Codebook update failed:', error);
       self.postMessage({
         type: 'codebook_updated',
         success: false,
-        error: error instanceof Error ? error.message : 'Unknown error'
+        error: error instanceof Error ? error.message : 'Unknown error',
+        requestId
       });
     }
     return;
@@ -1182,7 +1184,8 @@ self.onmessage = async (event) => {
           performanceStats: {
             averageTrainingTime: performanceMonitor.getAverageTrainingTime(),
             averagePredictionTime: performanceMonitor.getAveragePredictionTime()
-          }
+          },
+          requestId
         });
       })
       .catch((error) => {
@@ -1190,7 +1193,8 @@ self.onmessage = async (event) => {
         self.postMessage({ 
           type: 'training_complete', 
           success: false, 
-          error: error instanceof Error ? error.message : 'Unknown error'
+          error: error instanceof Error ? error.message : 'Unknown error',
+          requestId
         });
       });
   }
@@ -1211,7 +1215,8 @@ self.onmessage = async (event) => {
           performanceStats: {
             averageTrainingTime: performanceMonitor.getAverageTrainingTime(),
             averagePredictionTime: performanceMonitor.getAveragePredictionTime()
-          }
+          },
+          requestId
         });
       })
       .catch((error) => {
@@ -1219,7 +1224,8 @@ self.onmessage = async (event) => {
         self.postMessage({ 
           type: 'prediction_result', 
           prediction: null, 
-          error: error instanceof Error ? error.message : 'Unknown error'
+          error: error instanceof Error ? error.message : 'Unknown error',
+          requestId
         });
       });
   }
@@ -1228,7 +1234,8 @@ self.onmessage = async (event) => {
     const skills = enhancedMLEngine.getSkills();
     self.postMessage({ 
       type: 'skills_result', 
-      skills 
+      skills,
+      requestId
     });
   }
 
@@ -1259,14 +1266,16 @@ self.onmessage = async (event) => {
         bufferUtilization: learningMetrics.bufferUtilization,
         readyForIncremental: learningMetrics.readyForIncremental,
         diversity: learningMetrics.diversity,
-        learningDuration
+        learningDuration,
+        requestId
       });
     } catch (error) {
       console.error('[Enhanced ML Worker] Incremental learning failed:', error);
       self.postMessage({
         type: 'incremental_learning_complete',
         success: false,
-        error: error instanceof Error ? error.message : 'Unknown error'
+        error: error instanceof Error ? error.message : 'Unknown error',
+        requestId
       });
     }
     return;
@@ -1287,7 +1296,8 @@ self.onmessage = async (event) => {
     };
     self.postMessage({ 
       type: 'info_result', 
-      info 
+      info,
+      requestId
     });
   }
 };
