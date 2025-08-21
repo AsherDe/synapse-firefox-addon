@@ -7,6 +7,10 @@ import { MessageRouter } from './core/message-router';
 import { StateManager } from './core/state-manager';
 import { DataStorage } from './core/data-storage';
 import { MLService } from './core/ml-service';
+// types imported only for compile-time assistance (not emitted)
+// We rely on the ambient declarations in types.ts via triple-slash in worker, so here we just use minimal typing.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+// Note: types are declared globally in types.ts (no module exports), so we avoid importing them here.
 
 
 // Global services
@@ -102,10 +106,14 @@ function setupMessageHandlers(): void {
     'guidanceToggled': handleGuidanceToggledMessage,
     'exportData': handleExportDataMessage,
     'importData': handleImportDataMessage,
+  'getGuidanceState': handleGetGuidanceStateMessage,
+  'setGuidanceState': handleSetGuidanceStateMessage,
+  'getStorageOverview': handleGetStorageOverviewMessage,
     
     // Codebook and vocabulary
     'getCodebookInfo': handleGetCodebookInfoMessage,
-    'getVocabulary': handleGetVocabularyMessage
+  'getVocabulary': handleGetVocabularyMessage,
+  'getState': handleGetStateMessage,
   });
 }
 
@@ -135,12 +143,27 @@ async function handleUserActionEvent(message: any, sender: any): Promise<void> {
       return;
     }
 
-    const event = {
+    // Build EnrichedEvent with required context structure
+    const tabId: number | null = sender.tab?.id ?? null;
+    const windowId: number | null = sender.tab?.windowId ?? null;
+    let tabInfo: chrome.tabs.Tab | undefined = sender.tab;
+    if (!tabInfo && tabId !== null) {
+      try {
+        tabInfo = await browser.tabs.get(tabId);
+      } catch {
+        // ignore
+      }
+    }
+
+    const event: EnrichedEvent | any = {
       type: message.type,
       payload: message.payload,
       timestamp: Date.now(),
-      url: sender.url || message.url,
-      tabId: sender.tab?.id
+      context: {
+        tabId,
+        windowId,
+        tabInfo
+      }
     };
 
     // Add to sequence
@@ -158,6 +181,17 @@ async function handleUserActionEvent(message: any, sender: any): Promise<void> {
       type: 'eventAdded',
       data: event
     });
+
+    // 获取最新预测并广播（打通事件->预测->UI 链路）
+    try {
+      const prediction = await mlService.getPrediction();
+      messageRouter.broadcast('popup', {
+        type: 'predictionUpdate',
+        data: prediction
+      });
+    } catch (predErr) {
+      console.warn('[Background] Prediction attempt failed (will continue):', predErr);
+    }
     
     // Check if training is needed
     const sequence = await dataStorage.getSequence('globalActionSequence');
@@ -165,6 +199,16 @@ async function handleUserActionEvent(message: any, sender: any): Promise<void> {
       try {
         await mlService.trainModel();
         console.log('[Background] Model training completed');
+        // 训练完成后再触发一次预测更新（模型可能改善）
+        try {
+          const postTrainPrediction = await mlService.getPrediction();
+          messageRouter.broadcast('popup', {
+            type: 'predictionUpdate',
+            data: postTrainPrediction
+          });
+        } catch (e) {
+          console.warn('[Background] Post-train prediction failed:', e);
+        }
       } catch (error) {
         console.error('[Background] Training failed:', error);
       }
@@ -181,11 +225,26 @@ async function handleBrowserActionEvent(message: any, sender: any): Promise<void
       return;
     }
 
-    const event = {
+    const tabId: number | null = sender.tab?.id ?? null;
+    const windowId: number | null = sender.tab?.windowId ?? null;
+    let tabInfo: chrome.tabs.Tab | undefined = sender.tab;
+    if (!tabInfo && tabId !== null) {
+      try {
+        tabInfo = await browser.tabs.get(tabId);
+      } catch {
+        // ignore
+      }
+    }
+
+    const event: EnrichedEvent | any = {
       type: message.type,
       payload: message.payload,
       timestamp: Date.now(),
-      tabId: sender.tab?.id
+      context: {
+        tabId,
+        windowId,
+        tabInfo
+      }
     };
 
     await dataStorage.addToSequence('globalActionSequence', event);
@@ -394,6 +453,68 @@ async function handleGetVocabularyMessage(): Promise<any> {
   try {
     const modelInfo = await mlService.getModelInfo();
     return { success: true, data: modelInfo?.vocabulary || {} };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    return { success: false, error: errorMessage };
+  }
+}
+
+async function handleGetGuidanceStateMessage(): Promise<any> {
+  try {
+    const enabled = stateManager.get('assistantEnabled');
+    return { success: true, data: enabled !== false };
+  } catch (e) {
+    return { success: false, error: e instanceof Error ? e.message : 'Unknown error' };
+  }
+}
+
+async function handleSetGuidanceStateMessage(message: any): Promise<any> {
+  try {
+    const enabled = !!message.enabled;
+    stateManager.set('assistantEnabled', enabled);
+    stateManager.markAsPersistent('assistantEnabled');
+    return { success: true };
+  } catch (e) {
+    return { success: false, error: e instanceof Error ? e.message : 'Unknown error' };
+  }
+}
+
+async function handleGetStorageOverviewMessage(): Promise<any> {
+  try {
+    const stats = await dataStorage.getStorageStats();
+    return { success: true, data: stats };
+  } catch (e) {
+    return { success: false, error: e instanceof Error ? e.message : 'Unknown error' };
+  }
+}
+
+async function handleGetStateMessage(): Promise<any> {
+  try {
+    // Export a safe snapshot (avoid huge sequences)
+    const snapshotKeys = [
+      'modelLastTrained',
+      'modelTrainingStatus',
+      'trainingInProgress',
+      'modelTrainingSessions',
+      'lastPrediction',
+      'mlWorkerStatus',
+      'fullModelInfo',
+      'learningMetrics'
+    ];
+    const state: Record<string, any> = {};
+    snapshotKeys.forEach(k => state[k] = stateManager.get(k));
+
+    // Derive convenience booleans
+    const modelInfo = state.fullModelInfo;
+    const modelReady = !!(modelInfo && (modelInfo.isReady || modelInfo.workerReady));
+
+    return {
+      success: true,
+      data: {
+        ...state,
+        modelReady
+      }
+    };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     return { success: false, error: errorMessage };
