@@ -3,7 +3,7 @@
  */
 
 interface StateChangeListener {
-  (key: string, oldValue: any, newValue: any): void;
+  (key: string, newValue: any, oldValue: any): void;
 }
 
 export class StateManager {
@@ -28,7 +28,7 @@ export class StateManager {
     }
 
     // Notify listeners
-    this.notifyListeners(key, oldValue, value);
+    this.notifyListeners(key, value, oldValue);
   }
 
   /**
@@ -59,7 +59,7 @@ export class StateManager {
       }
 
       // Notify listeners
-      this.notifyListeners(key, oldValue, undefined);
+      this.notifyListeners(key, undefined, oldValue);
     }
 
     return deleted;
@@ -171,12 +171,12 @@ export class StateManager {
     }
   }
 
-  private notifyListeners(key: string, oldValue: any, newValue: any): void {
+  private notifyListeners(key: string, newValue: any, oldValue: any): void {
     const keyListeners = this.listeners.get(key);
     if (keyListeners) {
       keyListeners.forEach(listener => {
         try {
-          listener(key, oldValue, newValue);
+          listener(key, newValue, oldValue);
         } catch (error) {
           console.error(`[StateManager] Error in listener for ${key}:`, error);
         }

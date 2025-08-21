@@ -69,7 +69,7 @@ class PopupController {
         break;
         
       case 'modelInfoUpdate':
-        this.updateModelInfoDisplay(message.data.modelInfo, message.data.isReady);
+        this.updateModelInfoDisplay(message.data, message.data.isReady);
         break;
         
       case 'pauseStateUpdate':
@@ -447,25 +447,29 @@ class PopupController {
     const modelElement = document.getElementById('modelInfo');
     if (!modelElement) return;
 
-    if (!modelInfo || !isReady) {
+    // 根据 isReady 状态更新 UI
+    const status = isReady ? 'ready' : (modelInfo?.workerStatus || 'loading');
+    const statusText = isReady ? 'Model Ready' : `Model Status: ${status}...`;
+
+    if (!isReady) {
       modelElement.innerHTML = `
         <div class="model-status">
-          <div class="status-indicator ${isReady ? 'ready' : 'loading'}"></div>
-          <span>${isReady ? 'Model Ready' : 'Model Loading...'}</span>
+          <div class="status-indicator loading"></div>
+          <span>${statusText}</span>
         </div>
       `;
       return;
     }
-
+    
+    // 成功加载后显示详细信息
     modelElement.innerHTML = `
       <div class="model-status">
         <div class="status-indicator ready"></div>
         <span>Model Ready</span>
       </div>
       <div class="model-details">
-        <div class="model-param">Vocab Size: ${modelInfo.vocabSize}</div>
-        <div class="model-param">Sequence Length: ${modelInfo.sequenceLength}</div>
-        <div class="model-param">Total Parameters: ${modelInfo.totalParams?.toLocaleString()}</div>
+        <div class="model-param">Vocab Size: ${modelInfo.vocabSize || 'N/A'}</div>
+        <div class="model-param">Sequence Length: ${modelInfo.sequenceLength || 'N/A'}</div>
       </div>
     `;
   }
@@ -634,122 +638,74 @@ class PopupController {
     try {
       console.log('[Synapse] Export button clicked - starting data export...');
 
-      // Test if we can reach this point
       this.showExportMessage('Export started...', 'success');
 
-      // Get session storage data
-      console.log('[Synapse] Fetching session storage...');
-      let sessionData = {};
-      try {
-        sessionData = await this.getSessionStorageData();
-        console.log('[Synapse] Session storage data:', sessionData);
-      } catch (e) {
-        console.error('[Synapse] Session storage error:', e);
-      }
+      // 使用 Promise.allSettled 来确保所有数据获取都会完成，即使其中一些失败
+      const [sessionDataResult, localDataResult, modelDataResult] = await Promise.allSettled([
+        this.getSessionStorageData(),
+        this.getLocalStorageData(),
+        this.getModelInfoData()
+      ]);
 
-      // Get local storage data
-      console.log('[Synapse] Fetching local storage...');
-      let localData = {};
-      try {
-        localData = await this.getLocalStorageData();
-        console.log('[Synapse] Local storage keys:', Object.keys(localData));
-      } catch (e) {
-        console.error('[Synapse] Local storage error:', e);
-      }
+      const sessionData = sessionDataResult.status === 'fulfilled' ? sessionDataResult.value : { error: sessionDataResult.reason };
+      const localData = localDataResult.status === 'fulfilled' ? localDataResult.value : { error: localDataResult.reason };
+      const modelData = modelDataResult.status === 'fulfilled' ? modelDataResult.value : { error: modelDataResult.reason };
 
-      // Get model info
-      console.log('[Synapse] Fetching model info...');
-      let modelData = {};
-      try {
-        modelData = await this.getModelInfoData();
-        console.log('[Synapse] Model data:', modelData);
-      } catch (e) {
-        console.error('[Synapse] Model info error:', e);
-      }
+      console.log('[Synapse] Session storage data:', sessionData);
+      console.log('[Synapse] Local storage data:', localData);
+      console.log('[Synapse] Model data:', modelData);
 
       // Collect all data
       const exportData = {
         exportInfo: {
           timestamp: new Date().toISOString(),
-          version: '1.3.0',
+          version: '1.3.1',
           userAgent: navigator.userAgent,
           description: 'Complete Synapse extension data export for debugging - includes all event types including mouse patterns'
         },
-        
-        // Current session data
         eventSequence: this.sequence,
         sequenceStats: {
           totalEvents: this.sequence.length,
           eventTypeDistribution: this.getEventTypeDistribution(),
           recentActivity: this.getRecentActivity(),
           dataTypesIncluded: [
-            'user_action_click',
-            'user_action_keydown', 
-            'user_action_text_input',
-            'user_action_scroll',
-            'user_action_mouse_pattern', // Mouse movement data included
-            'user_action_form_submit',
-            'user_action_focus_change',
-            'user_action_page_visibility',
-            'user_action_mouse_hover',
-            'user_action_clipboard',
-            'browser_action_tab_created',
-            'browser_action_tab_activated',
-            'browser_action_tab_updated',
-            'browser_action_tab_removed'
+            'user_action_click', 'user_action_keydown', 'user_action_text_input',
+            'user_action_scroll', 'user_action_mouse_pattern', 'user_action_form_submit',
+            'user_action_focus_change', 'user_action_page_visibility', 'user_action_mouse_hover',
+            'user_action_clipboard', 'browser_action_tab_created', 'browser_action_tab_activated',
+            'browser_action_tab_updated', 'browser_action_tab_removed'
           ]
         },
-
-        // Get all stored data
         sessionStorage: sessionData,
         localStorage: localData,
-        
-        // Model information
         modelInfo: modelData,
-        
-        // Runtime information
         runtimeInfo: {
           popupLoadTime: new Date().toISOString(),
           updateIntervalActive: this.updateInterval !== null
         }
       };
 
-      // Create downloadable file
       console.log('[Synapse] Creating export file...');
-      console.log('[Synapse] Export data structure:', {
-        exportInfo: !!exportData.exportInfo,
-        eventSequence: exportData.eventSequence?.length || 0,
-        sessionStorage: Object.keys(exportData.sessionStorage || {}).length,
-        localStorage: Object.keys(exportData.localStorage || {}).length,
-        modelInfo: !!exportData.modelInfo
-      });
-      
-      const jsonString = JSON.stringify(exportData, null, 2);
-      console.log('[Synapse] JSON string length:', jsonString.length);
+      const jsonString = JSON.stringify(exportData, (_, value) => 
+        value instanceof Error ? `Error: ${value.message}` : value, 2
+      );
       
       const blob = new Blob([jsonString], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
 
-      // Generate filename with timestamp
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
       const filename = `synapse-debug-data-${timestamp}.json`;
 
-      // Create download link and trigger download
       const downloadLink = document.createElement('a');
       downloadLink.href = url;
       downloadLink.download = filename;
-      downloadLink.style.display = 'none';
-      
       document.body.appendChild(downloadLink);
       downloadLink.click();
       document.body.removeChild(downloadLink);
       
-      // Clean up
       URL.revokeObjectURL(url);
       
       console.log(`[Synapse] Data exported successfully as ${filename}`);
-      
-      // Show success message
       this.showExportMessage('Data exported successfully!', 'success');
 
     } catch (error) {

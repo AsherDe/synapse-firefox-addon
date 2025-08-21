@@ -1070,29 +1070,47 @@ function setupPageVisibilityMonitoring(): void {
  */
 function setupMouseHoverMonitoring(): void {
   const hoverStartTimes = new Map<HTMLElement, number>();
-  
-  // Start tracking hover without throttling to ensure proper event pairing
+  // 新增一个Map来存储进入元素的定时器
+  const hoverEnterTimers = new Map<HTMLElement, number>();
+  const HOVER_START_DELAY = 50; // 50毫秒的延迟，以确认用户意图
+
+  // 优化 mouseenter 逻辑
   document.addEventListener('mouseenter', (event) => {
     const target = event.target as HTMLElement;
-    hoverStartTimes.set(target, Date.now());
-    console.log('[Synapse] Hover started:', getCssSelector(target));
+
+    // 设置一个短暂的延迟，如果鼠标很快移出则取消
+    const timer = window.setTimeout(() => {
+      hoverStartTimes.set(target, Date.now());
+      console.log('[Synapse] Hover started:', getCssSelector(target));
+      hoverEnterTimers.delete(target);
+    }, HOVER_START_DELAY);
+
+    hoverEnterTimers.set(target, timer);
   }, true);
-  
-  // Track hover duration and send event on mouseleave
+
+  // 优化 mouseleave 逻辑
   document.addEventListener('mouseleave', (event) => {
     const target = event.target as HTMLElement;
+
+    // 如果存在进入定时器，说明悬停时间不足50ms，直接取消
+    if (hoverEnterTimers.has(target)) {
+      clearTimeout(hoverEnterTimers.get(target)!);
+      hoverEnterTimers.delete(target);
+      return; // 忽略这种快速划过的事件
+    }
+
     const hoverStartTime = hoverStartTimes.get(target);
-    
+
     if (hoverStartTime) {
       const hoverDuration = Date.now() - hoverStartTime;
       hoverStartTimes.delete(target);
-      
+
       console.log('[Synapse] Hover ended:', getCssSelector(target), 'duration:', hoverDuration);
-      
-      // Only report significant hovers (>100ms)
+
+      // 仅报告超过100ms的显著悬停
       if (hoverDuration > 100) {
         const features = extractElementFeatures(target, window.location.href);
-        
+
         const hoverPayload: UserActionMouseHoverPayload = {
           selector: getCssSelector(target),
           url: generateGeneralizedURL(window.location.href),
@@ -1112,8 +1130,6 @@ function setupMouseHoverMonitoring(): void {
       } else {
         console.log('[Synapse] Hover too short, not reported:', hoverDuration + 'ms');
       }
-    } else {
-      console.log('[Synapse] No start time found for mouseout on:', getCssSelector(target));
     }
   }, true);
 }

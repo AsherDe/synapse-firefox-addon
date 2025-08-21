@@ -5,7 +5,6 @@
 // EMERGENCY DEBUG: Immediate output using both console methods
 console.error('[SYNAPSE EMERGENCY] ===== SCRIPT FILE EXECUTED =====');
 console.log('[SYNAPSE EMERGENCY] ===== SCRIPT FILE EXECUTED =====');
-alert('SYNAPSE BACKGROUND SCRIPT STARTED!'); // This should definitely show
 
 // Immediate debug output before any imports
 console.error('[SYNAPSE DEBUG] ===== BACKGROUND SCRIPT STARTING TO LOAD =====');
@@ -51,6 +50,23 @@ async function initializeServices(): Promise<void> {
     // Set initial state
     stateManager.markAsPersistent('extensionPaused');
     stateManager.markAsPersistent('globalActionSequence');
+    
+    // [关键新增] 监听核心状态的变化，并广播给popup
+    stateManager.addListener('mlWorkerStatus', (key, newValue) => {
+      console.log(`[Background] State changed: ${key} = ${newValue}. Broadcasting to popup.`);
+      messageRouter.broadcast('popup', {
+        type: 'modelInfoUpdate', // 复用现有的消息类型
+        data: { workerStatus: newValue, isReady: newValue === 'ready' }
+      });
+    });
+
+    stateManager.addListener('globalActionSequence', (_, newValue) => {
+        // 当事件序列更新时也通知 popup
+        messageRouter.broadcast('popup', {
+            type: 'sequenceUpdate',
+            data: { sequence: newValue }
+        });
+    });
     
     console.log('[SYNAPSE BACKGROUND] ===== SERVICES INITIALIZED SUCCESSFULLY =====');
     
