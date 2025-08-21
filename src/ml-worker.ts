@@ -15,6 +15,9 @@
  */
 
 /// <reference path="./types.ts" />
+// Explicitly import TensorFlow.js so Webpack bundles it with the worker.
+// This removes reliance on a global tf injected elsewhere.
+import * as tf from '@tensorflow/tfjs';
 
 // Enhanced ML Worker with LSTM, Incremental Learning, and Rich Context Features
 
@@ -666,6 +669,12 @@ class IncrementalLearner {
   private learningBuffer: { xs: any, ys: any }[] = [];
   private readonly BUFFER_SIZE = 100;
   private readonly INCREMENTAL_BATCH_SIZE = 10;
+  // 与主训练保持一致的序列窗口长度
+  private sequenceLength: number;
+
+  constructor(sequenceLength: number) {
+    this.sequenceLength = sequenceLength;
+  }
   
   public addExperience(event: EnrichedEvent): void {
     this.recentExperiences.push(event);
@@ -675,35 +684,38 @@ class IncrementalLearner {
     }
   }
   
-  public prepareIncrementalBatch(contextExtractor: ContextExtractor, vocabulary: Map<string, number>): { xs: any, ys: any } | null {
-    if (this.recentExperiences.length < this.INCREMENTAL_BATCH_SIZE || typeof self === 'undefined' || !(self as any).tf) {
+  public prepareIncrementalBatch(
+    contextExtractor: ContextExtractor, 
+    vocabulary: Map<string, number>,
+    sequenceLength: number,
+    modelVocabSize: number
+  ): { xs: any, ys: any } | null {
+    if (this.recentExperiences.length < Math.max(this.INCREMENTAL_BATCH_SIZE, sequenceLength + 1) || typeof self === 'undefined' || !(self as any).tf) {
       return null;
     }
-    
+
     const tf = (self as any).tf;
-    const batchEvents = this.recentExperiences.slice(-this.INCREMENTAL_BATCH_SIZE);
-    
-    const enhancedFeatures = batchEvents.map(event => 
-      contextExtractor.extractRichFeatures(event)
-    );
-    
-    const tokenSequence = enhancedFeatures.map(features => 
-      vocabulary.get(features.primaryToken) || 0
-    );
-    
-    if (tokenSequence.length < 2) return null;
-    
+    const windowSize = sequenceLength + this.INCREMENTAL_BATCH_SIZE;
+    const batchEvents = this.recentExperiences.slice(-windowSize);
+    const enhancedFeatures = batchEvents.map(event => contextExtractor.extractRichFeatures(event));
+    const tokenSequence = enhancedFeatures.map(features => vocabulary.get(features.primaryToken) || 0);
+
     const inputSequences: number[][] = [];
     const outputTokens: number[] = [];
-    
-    for (let i = 0; i < tokenSequence.length - 1; i++) {
-      inputSequences.push([tokenSequence[i]]);
-      outputTokens.push(tokenSequence[i + 1]);
+    for (let i = 0; i <= tokenSequence.length - sequenceLength - 1; i++) {
+      const window = tokenSequence.slice(i, i + sequenceLength);
+      if (window.length === sequenceLength) {
+        inputSequences.push(window);
+        outputTokens.push(tokenSequence[i + sequenceLength]);
+      }
     }
-    
+
+    if (inputSequences.length === 0) return null;
+
     const xs = tf.tensor2d(inputSequences);
-    const ys = tf.oneHot(outputTokens, vocabulary.size);
-    
+    const outputIdxTensor = tf.tensor1d(outputTokens, 'int32');
+    const ys = tf.oneHot(outputIdxTensor, modelVocabSize);
+    outputIdxTensor.dispose();
     return { xs, ys };
   }
   
@@ -755,38 +767,32 @@ class EnhancedMLEngine {
   private totalEventCount: number = 0;
 
   constructor() {
-    this.contextExtractor = new ContextExtractor();
-    this.incrementalLearner = new IncrementalLearner();
+  this.contextExtractor = new ContextExtractor();
+  this.incrementalLearner = new IncrementalLearner(this.sequenceLength);
     this.initializeModel();
     this.isInitialized = true;
   }
 
   private async initializeModel(): Promise<void> {
     try {
-      if (typeof self !== 'undefined' && (self as any).tf) {
-        try {
-          this.model = await (self as any).tf.loadLayersModel(WORKER_MODEL_STORAGE_URL);
-          console.log('[Enhanced ML] Existing LSTM model loaded');
-        } catch (error) {
-          console.log('[Enhanced ML] No existing model found, will create new LSTM model when needed');
-        }
+      try {
+        this.model = await tf.loadLayersModel(WORKER_MODEL_STORAGE_URL);
+        console.log('[Enhanced ML] Existing LSTM model loaded');
+      } catch (error) {
+        console.log('[Enhanced ML] No existing model found, will create new LSTM model when needed');
       }
     } catch (error) {
       console.warn('[Enhanced ML] Model initialization failed:', error);
     }
   }
-
-  private createEnhancedLSTMModel(): any {
-    if (typeof self === 'undefined' || !(self as any).tf) {
-      console.warn('[Enhanced ML] TensorFlow.js not available');
+  private createEnhancedLSTMModel(vocabSize: number): any {
+    if (!tf) {
+      console.warn('[Enhanced ML] TensorFlow.js namespace missing');
       return null;
     }
 
-    const tf = (self as any).tf;
-    const vocabSize = Math.max(this.vocabulary.size, 50);
-    
     console.log(`[Enhanced ML] Creating LSTM model with vocab size: ${vocabSize}`);
-    
+
     const model = tf.sequential({
       layers: [
         tf.layers.embedding({
@@ -795,25 +801,25 @@ class EnhancedMLEngine {
           inputLength: this.sequenceLength,
           name: 'embedding'
         }),
-        tf.layers.lstm({ 
-          units: 128, 
+        tf.layers.lstm({
+          units: 128,
           returnSequences: true,
           dropout: 0.3,
           name: 'lstm1'
         }),
-        tf.layers.lstm({ 
+        tf.layers.lstm({
           units: 64,
           dropout: 0.3,
           name: 'lstm2'
         }),
-        tf.layers.dense({ 
-          units: 128, 
+        tf.layers.dense({
+          units: 128,
           activation: 'relu',
           name: 'dense1'
         }),
         tf.layers.dropout({ rate: 0.4 }),
-        tf.layers.dense({ 
-          units: vocabSize, 
+        tf.layers.dense({
+          units: vocabSize,
           activation: 'softmax',
           name: 'output'
         })
@@ -829,32 +835,45 @@ class EnhancedMLEngine {
     return model;
   }
 
+  private getCurrentVocabSize(): number {
+    try {
+      if (this.model) {
+        const outputLayer: any = this.model.getLayer('output');
+        if (outputLayer && typeof outputLayer.units === 'number') {
+          return outputLayer.units;
+        }
+      }
+    } catch {/* ignore */}
+    return Math.max(this.vocabulary.size, 50);
+  }
+
   public async train(sequence: GlobalActionSequence): Promise<void> {
     if (sequence.length < WORKER_MIN_TRAINING_EVENTS) {
-      console.log("[Enhanced ML] Sequence too short to train.");
       return;
     }
-
     console.log("[Enhanced ML] Starting enhanced training...");
-    
-    // 更新总事件数量用于置信度计算
-    this.totalEventCount = sequence.length;
-    
-    // Add experiences to incremental learner
-    sequence.forEach(event => this.incrementalLearner.addExperience(event));
-    
-    // Build vocabulary from enhanced features
+
     this.buildEnhancedVocabulary(sequence);
-    
-    // Create model if not exists
-    if (!this.model) {
-      this.model = this.createEnhancedLSTMModel();
+
+    // 动态计算当前需要的词汇表大小（至少 50）
+    const vocabSize = Math.max(this.vocabulary.size, 50);
+
+    // 如果模型不存在或输出层维度不匹配则重建
+    let currentOutputUnits: number | undefined;
+    if (this.model) {
+      try {
+        const outputLayer: any = this.model.getLayer('output');
+        currentOutputUnits = outputLayer?.units;
+      } catch {/* ignore */}
+    }
+    if (!this.model || currentOutputUnits !== vocabSize) {
+      console.log(`[Enhanced ML] Recreating model. Old size: ${currentOutputUnits}, New size: ${vocabSize}`);
+      this.model = this.createEnhancedLSTMModel(vocabSize);
     }
 
     if (this.model) {
-      // Prepare enhanced training data
-      const trainingData = this.prepareEnhancedTrainingData(sequence);
-      
+      const trainingData = this.prepareEnhancedTrainingData(sequence, vocabSize);
+
       if (trainingData) {
         await this.model.fit(trainingData.xs, trainingData.ys, {
           epochs: 5,
@@ -862,22 +881,21 @@ class EnhancedMLEngine {
           validationSplit: 0.2,
           verbose: 0
         });
-        
-        // Clean up tensors
+
         trainingData.xs.dispose();
         trainingData.ys.dispose();
-        
-        // Perform incremental learning
-        await this.performIncrementalLearning();
-        
-        // Save model
+
+  // 将当前训练序列事件添加到增量学习缓存
+  sequence.forEach(ev => this.incrementalLearner.addExperience(ev));
+
+  // 进行一次增量学习，使用模型当前的输出层维度作为 vocabSize
+  await this.performIncrementalLearning();
+
         await this.saveModel();
       }
     }
-    
-    // Analyze patterns for skills
+
     await this.analyzeEnhancedPatterns(sequence);
-    
     console.log("[Enhanced ML] Training completed.");
   }
 
@@ -900,43 +918,33 @@ class EnhancedMLEngine {
     });
   }
 
-  private prepareEnhancedTrainingData(sequence: GlobalActionSequence): { xs: any, ys: any } | null {
-    if (typeof self === 'undefined' || !(self as any).tf) {
-      return null;
-    }
+  private prepareEnhancedTrainingData(sequence: GlobalActionSequence, vocabSize: number): { xs: any, ys: any } | null {
+    if (!tf) return null;
 
-    const tf = (self as any).tf;
-    
-    const enhancedFeatures = sequence.map(event => 
-      this.contextExtractor.extractRichFeatures(event)
-    );
-    
-    const tokenSequence = enhancedFeatures.map(features => 
-      this.vocabulary.get(features.primaryToken) || 0
-    );
-    
+    const enhancedFeatures = sequence.map(event => this.contextExtractor.extractRichFeatures(event));
+    const tokenSequence = enhancedFeatures.map(features => this.vocabulary.get(features.primaryToken) || 0);
+
     const inputSequences: number[][] = [];
     const outputTokens: number[] = [];
-    
     for (let i = 0; i < tokenSequence.length - this.sequenceLength; i++) {
       inputSequences.push(tokenSequence.slice(i, i + this.sequenceLength));
       outputTokens.push(tokenSequence[i + this.sequenceLength]);
     }
-    
-    if (inputSequences.length === 0) {
-      return null;
-    }
-    
+    if (inputSequences.length === 0) return null;
+
     const xs = tf.tensor2d(inputSequences);
-    const ys = tf.oneHot(outputTokens, this.vocabulary.size);
-    
+    const outputIdxTensor = tf.tensor1d(outputTokens, 'int32');
+    const ys = tf.oneHot(outputIdxTensor, vocabSize);
+    outputIdxTensor.dispose();
     return { xs, ys };
   }
 
   public async performIncrementalLearning(): Promise<void> {
     const incrementalData = this.incrementalLearner.prepareIncrementalBatch(
-      this.contextExtractor, 
-      this.vocabulary
+      this.contextExtractor,
+      this.vocabulary,
+      this.sequenceLength,
+  this.getCurrentVocabSize()
     );
     
     if (incrementalData && this.model) {
@@ -1077,8 +1085,6 @@ class EnhancedMLEngine {
     }
 
     try {
-      const tf = (self as any).tf;
-      
       const enhancedFeatures = recentEvents.slice(-this.sequenceLength).map(event => 
         this.contextExtractor.extractRichFeatures(event)
       );
@@ -1088,8 +1094,9 @@ class EnhancedMLEngine {
       );
       
       const input = tf.tensor2d([tokenSequence]);
-      const prediction = this.model.predict(input);
-      const probabilities = await prediction.data();
+  const prediction = this.model.predict(input) as tf.Tensor;
+  const dataArr = await prediction.data();
+  const probabilities = dataArr instanceof Float32Array ? dataArr : new Float32Array(dataArr as any);
       
       let maxProb = 0;
       let maxIndex = 0;
