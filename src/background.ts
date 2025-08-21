@@ -83,6 +83,7 @@ function setupMessageHandlers(): void {
     'user_action_click': handleUserActionEvent,
     'user_action_keydown': handleUserActionEvent,
     'user_action_text_input': handleUserActionEvent,
+    'user_action_mouse_hover': handleUserActionEvent,
     'browser_action_tab_activated': handleBrowserActionEvent,
     'browser_action_tab_created': handleBrowserActionEvent,
     'browser_action_tab_removed': handleBrowserActionEvent,

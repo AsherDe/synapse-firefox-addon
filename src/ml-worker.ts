@@ -1281,6 +1281,32 @@ self.onmessage = async (event) => {
     return;
   }
 
+  if (type === 'processEvent') {
+    try {
+      // Add the event to incremental learner for continuous learning
+      enhancedMLEngine.incrementalLearner.addExperience(payload.event);
+      
+      // Get current learning metrics
+      const learningMetrics = enhancedMLEngine.getLearningMetrics();
+      
+      self.postMessage({
+        type: 'event_processed',
+        success: true,
+        learningMetrics,
+        requestId
+      });
+    } catch (error) {
+      console.error('[Enhanced ML Worker] Event processing failed:', error);
+      self.postMessage({
+        type: 'event_processed',
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+        requestId
+      });
+    }
+    return;
+  }
+
   if (type === 'getInfo') {
     const info = {
       vocabSize: enhancedMLEngine.getVocabularySize(),
