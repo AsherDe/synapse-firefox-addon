@@ -221,7 +221,8 @@ class PopupController {
         console.error('Failed to load prediction:', browser.runtime.lastError.message);
         return;
       }
-      this.updatePredictionDisplay(response?.prediction);
+      const prediction = response?.success ? response.data : response?.prediction;
+      this.updatePredictionDisplay(prediction);
     });
   }
 
@@ -231,7 +232,9 @@ class PopupController {
         console.error('Failed to load model info:', browser.runtime.lastError.message);
         return;
       }
-      this.updateModelInfoDisplay(response?.modelInfo, response?.isReady);
+      const modelInfo = response?.success ? response.data : response?.modelInfo;
+      const isReady = response?.success ? (response.data ? true : false) : response?.isReady;
+      this.updateModelInfoDisplay(modelInfo, isReady);
     });
   }
 
@@ -241,7 +244,8 @@ class PopupController {
         console.error('Failed to load pause state:', browser.runtime.lastError.message);
         return;
       }
-      this.updatePauseUI(response?.isPaused || false);
+      const isPaused = response?.success ? response.data : response?.isPaused;
+      this.updatePauseUI(isPaused || false);
     });
   }
 
@@ -543,7 +547,8 @@ class PopupController {
       // Request codebook info from background script
       browser.runtime.sendMessage({ type: 'getCodebookInfo' }, (response: any) => {
         if (response && codebookInfoElement) {
-          codebookInfoElement.textContent = JSON.stringify(response, null, 2);
+          const data = response?.success ? response.data : response;
+          codebookInfoElement.textContent = JSON.stringify(data, null, 2);
         }
       });
     }
@@ -554,15 +559,18 @@ class PopupController {
     const trainingHistoryElement = document.getElementById('trainingHistory');
 
     browser.runtime.sendMessage({ type: 'getModelInfo' }, (response: any) => {
-      if (modelArchElement && response?.modelInfo) {
-        modelArchElement.textContent = JSON.stringify(response.modelInfo, null, 2);
+      const modelInfo = response?.success ? response.data : response?.modelInfo;
+      const isReady = response?.success ? (response.data ? true : false) : response?.isReady;
+      
+      if (modelArchElement && modelInfo) {
+        modelArchElement.textContent = JSON.stringify(modelInfo, null, 2);
       }
       
       if (trainingHistoryElement) {
         const history = {
           lastTraining: 'Not available in this implementation',
           totalTrainingSessions: 'Tracked in background script',
-          modelReady: response?.isReady || false
+          modelReady: isReady || false
         };
         trainingHistoryElement.textContent = JSON.stringify(history, null, 2);
       }
@@ -624,7 +632,40 @@ class PopupController {
 
   private async exportAllData(): Promise<void> {
     try {
-      console.log('[Synapse] Starting data export...');
+      console.log('[Synapse] Export button clicked - starting data export...');
+
+      // Test if we can reach this point
+      this.showExportMessage('Export started...', 'success');
+
+      // Get session storage data
+      console.log('[Synapse] Fetching session storage...');
+      let sessionData = {};
+      try {
+        sessionData = await this.getSessionStorageData();
+        console.log('[Synapse] Session storage data:', sessionData);
+      } catch (e) {
+        console.error('[Synapse] Session storage error:', e);
+      }
+
+      // Get local storage data
+      console.log('[Synapse] Fetching local storage...');
+      let localData = {};
+      try {
+        localData = await this.getLocalStorageData();
+        console.log('[Synapse] Local storage keys:', Object.keys(localData));
+      } catch (e) {
+        console.error('[Synapse] Local storage error:', e);
+      }
+
+      // Get model info
+      console.log('[Synapse] Fetching model info...');
+      let modelData = {};
+      try {
+        modelData = await this.getModelInfoData();
+        console.log('[Synapse] Model data:', modelData);
+      } catch (e) {
+        console.error('[Synapse] Model info error:', e);
+      }
 
       // Collect all data
       const exportData = {
@@ -660,11 +701,11 @@ class PopupController {
         },
 
         // Get all stored data
-        sessionStorage: await this.getSessionStorageData(),
-        localStorage: await this.getLocalStorageData(),
+        sessionStorage: sessionData,
+        localStorage: localData,
         
         // Model information
-        modelInfo: await this.getModelInfoData(),
+        modelInfo: modelData,
         
         // Runtime information
         runtimeInfo: {
@@ -674,7 +715,18 @@ class PopupController {
       };
 
       // Create downloadable file
+      console.log('[Synapse] Creating export file...');
+      console.log('[Synapse] Export data structure:', {
+        exportInfo: !!exportData.exportInfo,
+        eventSequence: exportData.eventSequence?.length || 0,
+        sessionStorage: Object.keys(exportData.sessionStorage || {}).length,
+        localStorage: Object.keys(exportData.localStorage || {}).length,
+        modelInfo: !!exportData.modelInfo
+      });
+      
       const jsonString = JSON.stringify(exportData, null, 2);
+      console.log('[Synapse] JSON string length:', jsonString.length);
+      
       const blob = new Blob([jsonString], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
 
@@ -707,11 +759,22 @@ class PopupController {
   }
 
   private async getSessionStorageData(): Promise<any> {
-    return new Promise((resolve) => {
-      browser.storage.session.get(null, (data: any) => {
-        resolve(data);
-      });
-    });
+    try {
+      // In Manifest V2, session storage might not be available
+      if (browser.storage.session) {
+        return new Promise((resolve) => {
+          browser.storage.session.get(null, (data: any) => {
+            resolve(data);
+          });
+        });
+      } else {
+        console.warn('[Synapse] Session storage not available in this browser version');
+        return {};
+      }
+    } catch (error) {
+      console.warn('[Synapse] Session storage error:', error);
+      return {};
+    }
   }
 
   private async getLocalStorageData(): Promise<any> {
@@ -728,10 +791,10 @@ class PopupController {
         browser.runtime.sendMessage({ type: 'getCodebookInfo' }, (codebookResponse: any) => {
           browser.runtime.sendMessage({ type: 'getPrediction' }, (predictionResponse: any) => {
             resolve({
-              modelInfo: response?.modelInfo,
-              isReady: response?.isReady,
-              codebookInfo: codebookResponse?.codebookInfo,
-              lastPrediction: predictionResponse?.prediction
+              modelInfo: response?.success ? response.data : response?.modelInfo,
+              isReady: response?.success ? (response.data ? true : false) : response?.isReady,
+              codebookInfo: codebookResponse?.success ? codebookResponse.data : codebookResponse?.codebookInfo,
+              lastPrediction: predictionResponse?.success ? predictionResponse.data : predictionResponse?.prediction
             });
           });
         });
@@ -784,6 +847,16 @@ class PopupController {
 }
 
 // Initialize popup when DOM is loaded
+console.log('[SYNAPSE] Popup script loaded, waiting for DOMContentLoaded...');
+
 document.addEventListener('DOMContentLoaded', () => {
-  new PopupController();
+  console.log('[SYNAPSE] DOMContentLoaded fired, initializing PopupController...');
+  try {
+    new PopupController();
+    console.log('[SYNAPSE] PopupController created successfully!');
+  } catch (error) {
+    console.error('[SYNAPSE] Error creating PopupController:', error);
+  }
 });
+
+console.log('[SYNAPSE] Event listener added for DOMContentLoaded');

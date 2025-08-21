@@ -1,37 +1,47 @@
 # Synapse 项目 Claude 记忆文档
 
-## 🚨 重要约束和限制
+## 🚨 重要约束和限制 - 已完成重构 ✅
 
-### **绝对禁止 ES6 模块语法**
-- **❌ 禁止使用:** `import` / `export` 语句
-- **❌ 禁止使用:** `import()` 动态导入
-- **✅ 必须使用:** `/// <reference path="./types.ts" />` 引用类型
-- **✅ 必须使用:** 内联代码或全局函数/类
+### **✅ 现已支持模块化架构 (v1.3.2+)**
+- **✅ 现在使用:** Webpack 模块化构建系统
+- **✅ 现在使用:** ES6 模块 `import` / `export` 语句
+- **✅ 现在使用:** TypeScript 模块解析
+- **✅ 现在使用:** 分层模块架构
 
-**原因:** 浏览器扩展的 content script 和 background script 不支持 ES6 模块，会导致 `ReferenceError: exports is not defined` 错误。
+**重构完成:** 项目已成功从单体文件架构重构为模块化架构，大幅提升了可维护性。
 
-### TypeScript 配置要求
+### TypeScript 配置 (已更新)
 ```json
 {
-  "module": "none",  // 关键配置
+  "module": "ES2020",  // 支持模块化
+  "moduleResolution": "node",
   "target": "ES2020",
-  "isolatedModules": false
+  "isolatedModules": false,
+  "baseUrl": "./src",
+  "paths": {
+    "@core/*": ["core/*"],
+    "@/*": ["./*"]
+  }
 }
 ```
 
 ## 📁 项目结构
 
-### 核心文件
+### 核心文件 (已重构)
+- `src/background.ts` - 主背景脚本 (模块化协调器)
+- `src/core/message-router.ts` - 消息路由管理器
+- `src/core/state-manager.ts` - 状态管理器
+- `src/core/data-storage.ts` - 数据存储层
+- `src/core/ml-service.ts` - ML服务管理器
 - `src/content.ts` - Content script (用户交互事件捕获)
-- `src/background-combined.ts` - Background script (事件处理和ML)
 - `src/popup.ts` - 扩展弹窗界面
 - `src/smart-assistant.ts` - 智能引导功能
 - `src/types.ts` - 共享类型定义
 
-### 编译流程
-1. `npm run build` = `tsc && node build.js && web-ext build`
-2. TypeScript 编译到 `dist/` 目录
-3. `build.js` 重命名 background-combined.js → background.js
+### 编译流程 (已重构)
+1. `npm run build` = `webpack && web-ext build`
+2. Webpack 模块化编译到 `dist/` 目录
+3. 自动处理依赖关系和模块打包
 4. `web-ext build` 打包扩展
 
 ## 🎯 核心功能
@@ -69,15 +79,34 @@
 - **检查:** 编译后的 dist/content.js 是否存在语法错误
 - **调试:** 浏览器开发者工具查看 Console 错误
 
-## 📊 数据流架构
+## 📊 数据流架构 (重构后)
 
+### 新模块化架构
 ```
-用户操作 → Content Script → Background Script → IndexedDB
-                ↓
-              事件处理 → ML分析 → 预测生成
-                ↓
-           智能建议 → Smart Assistant → 用户反馈
+用户操作 → Content Script → MessageRouter → 各功能模块
+                              ↓
+                         StateManager (状态管理)
+                              ↓
+                         DataStorage (数据存储)
+                              ↓
+                         MLService (机器学习)
+                              ↓
+                    Smart Assistant → 用户反馈
 ```
+
+### 消息路由系统
+```
+content.ts → background.ts (通过 runtime.sendMessage)
+popup.ts ↔ background.ts (通过长连接 runtime.connect 和 sendMessage)
+background.ts ↔ ml-worker.ts (通过 postMessage)
+smart-assistant.ts ↔ content.ts ↔ background.ts (通过 window.postMessage 进行中继)
+```
+
+### 模块职责分离
+- **MessageRouter**: 统一处理来自不同组件的通信请求
+- **StateManager**: 集中式状态管理，支持持久化和事件监听
+- **DataStorage**: 数据存储层，批量写入优化和容量管理
+- **MLService**: ML功能管理，与 ml-worker 通信协调
 
 ## 🎨 代码风格指南
 

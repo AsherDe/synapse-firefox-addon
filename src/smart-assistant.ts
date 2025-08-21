@@ -260,8 +260,17 @@ class SmartAssistant {
     // Initially hidden
     this.assistantElement.style.display = 'none';
     
-    // Insert into page
-    document.body.appendChild(this.assistantElement);
+    // Insert into page (with DOM ready check)
+    if (document.body) {
+      document.body.appendChild(this.assistantElement);
+    } else {
+      // Wait for DOM to be ready
+      document.addEventListener('DOMContentLoaded', () => {
+        if (document.body && this.assistantElement) {
+          document.body.appendChild(this.assistantElement);
+        }
+      });
+    }
   }
 
   /**
@@ -1238,7 +1247,9 @@ class SmartAssistant {
           this.executeHintAction(hint);
         });
         
-        document.body.appendChild(hintElement);
+        if (document.body) {
+          document.body.appendChild(hintElement);
+        }
       }
     });
   }
@@ -1300,7 +1311,9 @@ class SmartAssistant {
         </div>
       `;
       
-      document.body.appendChild(popup);
+      if (document.body) {
+        document.body.appendChild(popup);
+      }
       
       // 添加事件监听器
       popup.addEventListener('click', (event: MouseEvent) => {

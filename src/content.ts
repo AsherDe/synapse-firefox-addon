@@ -1256,7 +1256,18 @@ function initializeSmartAssistant(): void {
       smartAssistantScript.onerror = (error) => {
         console.error('[Synapse] Failed to load smart assistant:', error);
       };
-      document.head.appendChild(smartAssistantScript);
+      if (document.head) {
+        document.head.appendChild(smartAssistantScript);
+      } else {
+        // Wait for DOM to be ready
+        if (document.readyState === 'loading') {
+          document.addEventListener('DOMContentLoaded', () => {
+            if (document.head && smartAssistantScript) {
+              document.head.appendChild(smartAssistantScript);
+            }
+          });
+        }
+      }
     } else if (!isEnabled && smartAssistantScript) {
       // Remove smart assistant if disabled
       smartAssistantScript.remove();
