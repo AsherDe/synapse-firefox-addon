@@ -48,17 +48,8 @@ async function initializeServices(): Promise<void> {
     stateManager.markAsPersistent('extensionPaused');
     stateManager.markAsPersistent('globalActionSequence');
     
-    // [关键修改] 在MLService创建之前设置状态监听器
-    stateManager.addListener('mlWorkerStatus', (key, newValue) => {
-      console.log(`[Background] State changed: ${key} = ${newValue}. Broadcasting to popup.`);
-      messageRouter.broadcast('popup', {
-        type: 'modelInfoUpdate', // 复用现有的消息类型
-        data: { workerStatus: newValue, isReady: newValue === 'ready' }
-      });
-    });
-
-    // [新增] 监听 fullModelInfo 的变化，并向所有弹窗广播
-    stateManager.addListener('fullModelInfo', (key, newValue) => {
+    // 监听 fullModelInfo 的变化，并向所有弹窗广播
+    stateManager.addListener('fullModelInfo', (_, newValue) => {
         console.log(`[Background] Broadcasting updated model info:`, newValue);
         messageRouter.broadcast('popup', {
             type: 'modelInfoUpdate',

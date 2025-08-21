@@ -1209,7 +1209,7 @@ self.onmessage = async (event) => {
         
         self.postMessage({ 
           type: 'prediction_result', 
-          prediction,
+          data: prediction,
           predictionDuration,
           learningMetrics: enhancedMLEngine.getLearningMetrics(),
           performanceStats: {
@@ -1223,7 +1223,7 @@ self.onmessage = async (event) => {
         console.error('[Enhanced ML Worker] Prediction failed:', error);
         self.postMessage({ 
           type: 'prediction_result', 
-          prediction: null, 
+          data: null, 
           error: error instanceof Error ? error.message : 'Unknown error',
           requestId
         });
@@ -1234,7 +1234,7 @@ self.onmessage = async (event) => {
     const skills = enhancedMLEngine.getSkills();
     self.postMessage({ 
       type: 'skills_result', 
-      skills,
+      data: skills,
       requestId
     });
   }
@@ -1287,6 +1287,7 @@ self.onmessage = async (event) => {
       skillsCount: enhancedMLEngine.getSkills().length,
       learningMetrics: enhancedMLEngine.getLearningMetrics(),
       isInitialized: true,
+      workerReady: true,
       features: {
         richContextExtraction: true,
         incrementalLearning: true,
@@ -1296,7 +1297,7 @@ self.onmessage = async (event) => {
     };
     self.postMessage({ 
       type: 'info_result', 
-      info,
+      data: { info },
       requestId
     });
   }

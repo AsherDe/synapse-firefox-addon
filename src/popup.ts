@@ -78,8 +78,10 @@ class PopupController {
         break;
         
       case 'modelInfoUpdate':
-        // [关键修改] 直接使用收到的数据对象
-        this.updateModelInfoDisplay(message.data, message.data.isReady || message.data.workerReady);
+        // 直接使用收到的完整数据对象
+        if (message.data && message.data.isReady) {
+          this.updateModelInfoDisplay(message.data, true);
+        }
         break;
         
       case 'pauseStateChanged':
@@ -106,10 +108,9 @@ class PopupController {
         if (message.data.prediction) {
           this.updatePredictionDisplay(message.data.prediction);
         }
-        // [关键修改] 正确处理初始模型信息
-        if (message.data.modelInfo) {
-          const isReady = message.data.modelInfo.isReady || message.data.modelInfo.workerReady;
-          this.updateModelInfoDisplay(message.data.modelInfo, isReady);
+        // 处理初始模型信息
+        if (message.data.modelInfo && message.data.modelInfo.isReady) {
+          this.updateModelInfoDisplay(message.data.modelInfo, true);
         }
         if (message.data.paused !== undefined) {
           this.updatePauseUI(message.data.paused);
@@ -237,17 +238,6 @@ class PopupController {
     });
   }
 
-  private loadModelInfo(): void {
-    browser.runtime.sendMessage({ type: 'getModelInfo' }, (response: any) => {
-      if (browser.runtime.lastError) {
-        console.error('Failed to load model info:', browser.runtime.lastError.message);
-        return;
-      }
-      const modelInfo = response?.success ? response.data : response?.modelInfo;
-      const isReady = response?.success ? (response.data ? true : false) : response?.isReady;
-      this.updateModelInfoDisplay(modelInfo, isReady);
-    });
-  }
 
   private loadPauseState(): void {
     browser.runtime.sendMessage({ type: 'getPauseState' }, (response: any) => {
@@ -338,7 +328,6 @@ class PopupController {
     console.log('[Popup] Using fallback periodic updates');
     this.updateInterval = window.setInterval(() => {
       this.loadPrediction();
-      this.loadModelInfo();
       this.loadPauseState();
     }, 5000);
   }
@@ -458,20 +447,18 @@ class PopupController {
     const modelElement = document.getElementById('modelInfo');
     if (!modelElement) return;
 
-    const status = isReady ? 'ready' : (modelInfo?.workerStatus || 'loading');
-    const statusText = isReady ? 'Model Ready' : `Model Status: ${status}...`;
-
-    if (!isReady || !modelInfo) {
+    // Since we only call this with complete model info, simplify the logic
+    if (!modelInfo || !isReady) {
       modelElement.innerHTML = `
         <div class="model-status">
           <div class="status-indicator loading"></div>
-          <span>${statusText}</span>
+          <span>Loading model information...</span>
         </div>
       `;
       return;
     }
     
-    // [最终修复] 数据现在嵌套在 modelInfo.info 中
+    // Model info data is nested in modelInfo.info
     const details = modelInfo.info || modelInfo;
 
     modelElement.innerHTML = `
