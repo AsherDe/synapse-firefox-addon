@@ -693,59 +693,222 @@ function setupScrollMonitoring(): void {
 }
 
 /**
- * Monitor mouse movement patterns with debouncing
+ * Advanced Mouse Trajectory Monitor
+ * Implements CLAUDE.md guidance for trajectory recording with DCT compression
  */
-function setupMouseMoveMonitoring(): void {
-  let mouseTrail: {x: number, y: number, timestamp: number}[] = [];
-  const maxTrailLength = 8;
+class MouseTrajectoryMonitor {
+  private trajectory: {x: number, y: number, timestamp: number}[] = [];
+  private isRecording: boolean = false;
+  private lastInteractionTime: number = 0;
+  private stopRecordingTimer: number | null = null;
   
-  document.addEventListener('mousemove', (event) => {
-    // Use debounce to only process mouse movement after user stops moving for a moment
-    advancedThrottler.debounce('mousemove', () => {
-      // Add to trail
-      mouseTrail.push({
+  private readonly IDLE_TIME_BEFORE_RECORDING = 500; // Start recording after 500ms of no interaction
+  private readonly STOP_RECORDING_DELAY = 300; // Stop recording after 300ms of no movement
+  private readonly MIN_TRAJECTORY_LENGTH = 10; // Minimum points for valid trajectory
+
+  constructor() {
+    this.setupEventListeners();
+  }
+
+  private setupEventListeners(): void {
+    // Track user interactions to determine idle periods
+    document.addEventListener('click', () => this.onUserInteraction(), { passive: true });
+    document.addEventListener('keydown', () => this.onUserInteraction(), { passive: true });
+    document.addEventListener('scroll', () => this.onUserInteraction(), { passive: true });
+    
+    // Monitor mouse movement
+    document.addEventListener('mousemove', (event) => this.onMouseMove(event), { passive: true });
+  }
+
+  private onUserInteraction(): void {
+    this.lastInteractionTime = Date.now();
+    
+    // If we were recording, finalize the current trajectory
+    if (this.isRecording) {
+      this.finalizeTrajectory();
+    }
+    
+    this.isRecording = false;
+  }
+
+  private onMouseMove(event: MouseEvent): void {
+    const now = Date.now();
+    
+    // Start recording if enough idle time has passed
+    if (!this.isRecording && (now - this.lastInteractionTime) > this.IDLE_TIME_BEFORE_RECORDING) {
+      this.startRecording();
+    }
+    
+    // Record trajectory point if we're recording
+    if (this.isRecording) {
+      this.trajectory.push({
         x: event.clientX,
         y: event.clientY,
-        timestamp: Date.now()
+        timestamp: now
       });
       
-      // Keep trail size limited
-      if (mouseTrail.length > maxTrailLength) {
-        mouseTrail.shift();
+      // Reset stop timer
+      this.resetStopTimer();
+    }
+  }
+
+  private startRecording(): void {
+    this.isRecording = true;
+    this.trajectory = [];
+    console.log('[Synapse] Started trajectory recording');
+  }
+
+  private resetStopTimer(): void {
+    if (this.stopRecordingTimer) {
+      clearTimeout(this.stopRecordingTimer);
+    }
+    
+    this.stopRecordingTimer = window.setTimeout(() => {
+      this.finalizeTrajectory();
+    }, this.STOP_RECORDING_DELAY);
+  }
+
+  private finalizeTrajectory(): void {
+    if (!this.isRecording || this.trajectory.length < this.MIN_TRAJECTORY_LENGTH) {
+      this.cleanup();
+      return;
+    }
+
+    console.log('[Synapse] Finalizing trajectory with', this.trajectory.length, 'points');
+    
+    // Process trajectory with DCT compression and send
+    this.processAndSendTrajectory();
+    this.cleanup();
+  }
+
+  private processAndSendTrajectory(): void {
+    const compressedFeatures = this.applyDCTCompression(this.trajectory);
+    const basicFeatures = this.extractBasicFeatures(this.trajectory);
+    
+    const features = {
+      ...basicFeatures,
+      dct_x_coefficients: compressedFeatures.x_coefficients,
+      dct_y_coefficients: compressedFeatures.y_coefficients,
+      compressed_length: compressedFeatures.compressed_length,
+      original_length: this.trajectory.length,
+      domain: window.location.hostname,
+      page_type: inferPageType(window.location.href)
+    };
+    
+    const message = {
+      type: 'user_action_mouse_pattern',
+      payload: {
+        url: generateGeneralizedURL(window.location.href),
+        features: features,
+        trajectory_start: this.trajectory[0],
+        trajectory_end: this.trajectory[this.trajectory.length - 1],
+        timestamp: Date.now()
       }
+    };
+    
+    sendToBackground(message);
+    console.log('[Synapse] Trajectory sent with DCT compression');
+  }
+
+  private applyDCTCompression(trajectory: {x: number, y: number, timestamp: number}[]): any {
+    // Extract x and y coordinates
+    const x_coords = trajectory.map(point => point.x);
+    const y_coords = trajectory.map(point => point.y);
+    
+    // Apply simplified DCT (keep first N coefficients)
+    const N = 10; // Keep first 10 coefficients as per CLAUDE.md guidance
+    const x_coefficients = this.simpleDCT(x_coords).slice(0, N);
+    const y_coefficients = this.simpleDCT(y_coords).slice(0, N);
+    
+    return {
+      x_coefficients,
+      y_coefficients,
+      compressed_length: N * 2 // 2 * N coefficients total
+    };
+  }
+
+  private simpleDCT(data: number[]): number[] {
+    const N = data.length;
+    const coefficients: number[] = [];
+    
+    for (let k = 0; k < N; k++) {
+      let sum = 0;
+      for (let n = 0; n < N; n++) {
+        sum += data[n] * Math.cos(Math.PI * k * (2 * n + 1) / (2 * N));
+      }
+      coefficients[k] = sum * Math.sqrt(k === 0 ? 1/N : 2/N);
+    }
+    
+    return coefficients;
+  }
+
+  private extractBasicFeatures(trajectory: {x: number, y: number, timestamp: number}[]): any {
+    let totalDistance = 0;
+    let directionChanges = 0;
+    let lastDirection = null;
+    
+    for (let i = 1; i < trajectory.length; i++) {
+      const dx = trajectory[i].x - trajectory[i-1].x;
+      const dy = trajectory[i].y - trajectory[i-1].y;
+      const distance = Math.sqrt(dx * dx + dy * dy);
+      totalDistance += distance;
       
-      // Analyze mouse movement pattern
-      if (mouseTrail.length >= 3) {
-        const pattern = analyzeMousePattern(mouseTrail);
-        
-        // Only send meaningful mouse patterns (进一步降低门槛以收集更多数据用于研究)
-        if (pattern.significance > 0.02) {
-          const features = {
-            pattern_type: pattern.type,
-            movement_speed: pattern.speed,
-            direction_changes: pattern.directionChanges,
-            total_distance: pattern.totalDistance,
-            significance: pattern.significance,
-            domain: window.location.hostname,
-            page_type: inferPageType(window.location.href)
-          };
-          
-          const message = {
-            type: 'user_action_mouse_pattern',
-            payload: {
-              url: generateGeneralizedURL(window.location.href),
-              features: features,
-              trail: mouseTrail.slice(), // Copy of trail
-              timestamp: Date.now()
-            }
-          };
-          
-          sendToBackground(message);
-          mouseTrail = []; // Reset trail after sending
-        }
+      const currentDirection = Math.atan2(dy, dx);
+      if (lastDirection !== null && Math.abs(currentDirection - lastDirection) > Math.PI / 4) {
+        directionChanges++;
       }
-    }, 300); // Debounce mouse movement analysis - 降低收集频率
-  }, { passive: true });
+      lastDirection = currentDirection;
+    }
+    
+    const timeSpan = trajectory[trajectory.length - 1].timestamp - trajectory[0].timestamp;
+    const speed = totalDistance / Math.max(timeSpan, 1);
+    
+    let patternType = 'linear';
+    if (directionChanges > 3) {
+      patternType = 'erratic';
+    } else if (speed < 0.1) {
+      patternType = 'slow';
+    } else if (speed > 2) {
+      patternType = 'fast';
+    }
+    
+    const significance = Math.min(1, 
+      (totalDistance / 100) * 0.4 + 
+      (directionChanges / 5) * 0.3 + 
+      Math.min(speed, 1) * 0.3
+    );
+    
+    return {
+      pattern_type: patternType,
+      movement_speed: speed,
+      direction_changes: directionChanges,
+      total_distance: totalDistance,
+      significance: significance,
+      duration: timeSpan
+    };
+  }
+
+  private cleanup(): void {
+    this.isRecording = false;
+    this.trajectory = [];
+    
+    if (this.stopRecordingTimer) {
+      clearTimeout(this.stopRecordingTimer);
+      this.stopRecordingTimer = null;
+    }
+  }
+}
+
+// Create global trajectory monitor instance
+const mouseTrajectoryMonitor = new MouseTrajectoryMonitor();
+
+/**
+ * Legacy mouse movement monitoring - kept for compatibility
+ * Now replaced by MouseTrajectoryMonitor
+ */
+function setupMouseMoveMonitoring(): void {
+  // This function is now handled by MouseTrajectoryMonitor
+  console.log('[Synapse] Mouse movement monitoring delegated to MouseTrajectoryMonitor');
 }
 
 /**
