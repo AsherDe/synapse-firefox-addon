@@ -249,6 +249,45 @@ class WorkerTokenizer {
       vector.push(focusType === 'focusout' ? 1.0 : 0.0);
       vector.push(payload.features?.is_input_field ? 1.0 : 0.0);
       vector.push(payload.features?.path_depth || 0);
+    } else if (event.type === 'user_action_mouse_pattern') {
+      const payload = event.payload as any;
+      const features = payload.features;
+      
+      // Add DCT coefficients (first 4 of each for feature vector size consistency)
+      if (features?.dct_x_coefficients && features?.dct_y_coefficients) {
+        // Normalize DCT coefficients for ML model
+        const x_coeffs = features.dct_x_coefficients.slice(0, 4);
+        const y_coeffs = features.dct_y_coefficients.slice(0, 4);
+        
+        // Add normalized X coefficients
+        x_coeffs.forEach((coeff: number, i: number) => {
+          vector.push(Math.tanh(coeff / 1000)); // Normalize large coefficients
+        });
+        
+        // Add normalized Y coefficients  
+        y_coeffs.forEach((coeff: number, i: number) => {
+          vector.push(Math.tanh(coeff / 1000)); // Normalize large coefficients
+        });
+        
+        // Pad remaining slots
+        const remainingSlots = 8 - x_coeffs.length - y_coeffs.length;
+        for (let i = 0; i < remainingSlots; i++) {
+          vector.push(0);
+        }
+      } else {
+        // Fallback to basic pattern features
+        vector.push(features?.movement_speed ? Math.tanh(features.movement_speed) : 0);
+        vector.push(features?.direction_changes || 0);
+        vector.push(features?.total_distance ? Math.tanh(features.total_distance / 100) : 0);
+        vector.push(features?.significance || 0);
+        vector.push(0, 0, 0, 0); // Padding
+      }
+      
+      // Additional trajectory metadata
+      vector.push(features?.original_length ? Math.tanh(features.original_length / 100) : 0);
+      vector.push(features?.duration ? Math.tanh(features.duration / 1000) : 0);
+      vector.push(features?.pattern_type === 'erratic' ? 1.0 : 0.0);
+      vector.push(features?.pattern_type === 'fast' ? 1.0 : 0.0);
     } else if (event.type === 'user_action_page_visibility') {
       const payload = event.payload as any;
       const visibilityState = payload.visibility_state || 'unknown';
@@ -337,7 +376,7 @@ class ContextExtractor {
       case 'user_action_scroll':
         return 'scroll_action';
       case 'user_action_mouse_pattern':
-        return 'mouse_pattern';
+        return this.mousePatternEventToToken(event as UserActionMousePatternEvent);
       case 'user_action_form_submit':
         return 'form_submit';
       case 'user_action_focus_change':
@@ -577,6 +616,28 @@ class ContextExtractor {
     const pageType = payload.features?.page_type || 'general';
     
     return `page_${visibilityState}_${pageType}`;
+  }
+
+  private mousePatternEventToToken(event: UserActionMousePatternEvent): string {
+    const payload = event.payload;
+    const features = payload.features;
+    
+    if (!features) {
+      return 'mouse_pattern_unknown';
+    }
+    
+    const patternType = features.pattern_type || 'unknown';
+    const pageType = features.page_type || 'general';
+    const hasCompression = (features as any).dct_x_coefficients && (features as any).dct_y_coefficients;
+    
+    // Create more descriptive tokens based on trajectory characteristics
+    if (hasCompression) {
+      const significance = features.significance || 0;
+      const significanceLevel = significance > 0.7 ? 'high' : significance > 0.3 ? 'medium' : 'low';
+      return `mouse_trajectory_${patternType}_${significanceLevel}_${pageType}`;
+    } else {
+      return `mouse_pattern_${patternType}_${pageType}`;
+    }
   }
 
   private inferPageType(url: string): string {
