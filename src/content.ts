@@ -1072,27 +1072,35 @@ function setupMouseHoverMonitoring(): void {
   const hoverStartTimes = new Map<HTMLElement, number>();
   // 新增一个Map来存储进入元素的定时器
   const hoverEnterTimers = new Map<HTMLElement, number>();
-  const HOVER_START_DELAY = 50; // 50毫秒的延迟，以确认用户意图
+  // 防抖和冷却机制变量
+  let lastHoverSentAt = 0;
+  const HOVER_COOLDOWN = 50; // 50ms 冷却时间
+  const HOVER_DEBOUNCE_DELAY = 300; // 300ms 防抖延迟
 
-  // 优化 mouseenter 逻辑
+  // 优化 mouseenter 逻辑 - 实现防抖机制
   document.addEventListener('mouseenter', (event) => {
     const target = event.target as HTMLElement;
 
-    // 设置一个短暂的延迟，如果鼠标很快移出则取消
+    // 清除之前的进入定时器（如果存在）
+    if (hoverEnterTimers.has(target)) {
+      clearTimeout(hoverEnterTimers.get(target)!);
+    }
+
+    // 设置防抖延迟，只有在用户停留超过300ms时才记录悬停开始
     const timer = window.setTimeout(() => {
       hoverStartTimes.set(target, Date.now());
       console.log('[Synapse] Hover started:', getCssSelector(target));
       hoverEnterTimers.delete(target);
-    }, HOVER_START_DELAY);
+    }, HOVER_DEBOUNCE_DELAY); // 使用300ms防抖延迟
 
     hoverEnterTimers.set(target, timer);
   }, true);
 
-  // 优化 mouseleave 逻辑
+  // 优化 mouseleave 逻辑 - 添加交互元素过滤和冷却机制
   document.addEventListener('mouseleave', (event) => {
     const target = event.target as HTMLElement;
 
-    // 如果存在进入定时器，说明悬停时间不足50ms，直接取消
+    // 如果存在进入定时器，说明悬停时间不足300ms，直接取消
     if (hoverEnterTimers.has(target)) {
       clearTimeout(hoverEnterTimers.get(target)!);
       hoverEnterTimers.delete(target);
@@ -1107,28 +1115,42 @@ function setupMouseHoverMonitoring(): void {
 
       console.log('[Synapse] Hover ended:', getCssSelector(target), 'duration:', hoverDuration);
 
-      // 仅报告超过100ms的显著悬停
-      if (hoverDuration > 100) {
-        const features = extractElementFeatures(target, window.location.href);
+      // 检查是否为可交互元素
+      const isInteractive = target.tagName.toLowerCase() === 'a' || 
+                           target.tagName.toLowerCase() === 'button' ||
+                           target.tagName.toLowerCase() === 'input' ||
+                           target.closest('[role="button"], [role="link"], [role="menuitem"]') !== null;
 
-        const hoverPayload: UserActionMouseHoverPayload = {
-          selector: getCssSelector(target),
-          url: generateGeneralizedURL(window.location.href),
-          features: features,
-          hover_duration: hoverDuration,
-          x: event.clientX,
-          y: event.clientY
-        };
+      // 仅报告超过300ms的显著悬停且为可交互元素
+      if (hoverDuration > 300 && isInteractive) {
+        // 实现冷却机制以防止事件冒泡导致的冗余记录
+        const now = Date.now();
+        if (now - lastHoverSentAt > HOVER_COOLDOWN) {
+          lastHoverSentAt = now;
+          
+          const features = extractElementFeatures(target, window.location.href);
 
-        const message: RawUserAction = {
-          type: 'user_action_mouse_hover',
-          payload: hoverPayload,
-        };
+          const hoverPayload: UserActionMouseHoverPayload = {
+            selector: getCssSelector(target),
+            url: generateGeneralizedURL(window.location.href),
+            features: features,
+            hover_duration: hoverDuration,
+            x: event.clientX,
+            y: event.clientY
+          };
 
-        sendToBackground(message);
-        console.log('[Synapse] Significant hover reported:', getCssSelector(target), 'duration:', hoverDuration);
+          const message: RawUserAction = {
+            type: 'user_action_mouse_hover',
+            payload: hoverPayload,
+          };
+
+          sendToBackground(message);
+          console.log('[Synapse] Significant hover reported:', getCssSelector(target), 'duration:', hoverDuration);
+        } else {
+          console.log('[Synapse] Hover event cooled down, not reported');
+        }
       } else {
-        console.log('[Synapse] Hover too short, not reported:', hoverDuration + 'ms');
+        console.log('[Synapse] Hover not reported - duration:', hoverDuration + 'ms', 'interactive:', isInteractive);
       }
     }
   }, true);
