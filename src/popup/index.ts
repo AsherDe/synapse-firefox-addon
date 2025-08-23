@@ -78,8 +78,9 @@ class PopupController {
         
       case 'modelInfoUpdate':
         // 直接使用收到的完整数据对象
-        if (message.data && message.data.isReady) {
-          this.updateModelInfoDisplay(message.data, true);
+        if (message.data) {
+          const isReady = message.data.status === 'ready';
+          this.updateModelInfoDisplay(message.data, isReady);
         }
         break;
         
@@ -108,8 +109,9 @@ class PopupController {
           this.updatePredictionDisplay(message.data.prediction);
         }
         // 处理初始模型信息
-        if (message.data.modelInfo && message.data.modelInfo.isReady) {
-          this.updateModelInfoDisplay(message.data.modelInfo, true);
+        if (message.data.modelInfo) {
+          const isReady = message.data.modelInfo.status === 'ready';
+          this.updateModelInfoDisplay(message.data.modelInfo, isReady);
         }
         if (message.data.paused !== undefined) {
           this.updatePauseUI(message.data.paused);
@@ -389,8 +391,7 @@ class PopupController {
     const modelElement = document.getElementById('modelInfo');
     if (!modelElement) return;
 
-    // Since we only call this with complete model info, simplify the logic
-    if (!modelInfo || !isReady) {
+    if (!isReady) {
       modelElement.innerHTML = `
         <div class="model-status">
           <div class="status-indicator loading"></div>
@@ -399,9 +400,6 @@ class PopupController {
       `;
       return;
     }
-    
-    // Model info data is nested in modelInfo.info
-    const details = modelInfo.info || modelInfo;
 
     modelElement.innerHTML = `
       <div class="model-status">
@@ -409,9 +407,9 @@ class PopupController {
         <span>Model Ready</span>
       </div>
       <div class="model-details">
-        <div class="model-param">Vocab Size: ${details.vocabSize || 'N/A'}</div>
-        <div class="model-param">Sequence Length: ${details.sequenceLength || 'N/A'}</div>
-        <div class="model-param">ML Worker: ${details.workerReady ? 'Active' : 'Inactive'}</div>
+        <div class="model-param">Type: ${modelInfo.modelType || 'N/A'}</div>
+        <div class="model-param">Version: ${modelInfo.version || 'N/A'}</div>
+        <div class="model-param">Features: ${modelInfo.featuresCount || 'N/A'}</div>
       </div>
     `;
   }

@@ -150,13 +150,8 @@ async function broadcastCompleteDataSnapshot(port?: any): Promise<void> {
     if (!modelInfo && mlService) {
       try {
         const freshModelInfo = await mlService.getModelInfo();
-        if (freshModelInfo && freshModelInfo.info) {
-          modelInfo = {
-            info: freshModelInfo.info,
-            isReady: true,
-            workerReady: true,
-            workerStatus: 'ready'
-          };
+        if (freshModelInfo && freshModelInfo.status === 'ready') {
+          modelInfo = freshModelInfo;
           // Cache it for future requests
           stateManager.set('fullModelInfo', modelInfo);
         }
@@ -171,7 +166,7 @@ async function broadcastCompleteDataSnapshot(port?: any): Promise<void> {
         sequence: sequence.slice(-100),
         paused: pauseState,
         guidanceEnabled: guidanceEnabled,
-        modelInfo: modelInfo || { workerStatus: 'loading', isReady: false },
+        modelInfo: modelInfo || { status: 'loading' },
         timestamp: Date.now()
       }
     };
