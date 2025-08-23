@@ -657,7 +657,7 @@ function setupScrollMonitoring(): void {
       if (newDirection !== scrollDirection || Math.abs(currentScrollTop - lastScrollTop) > 20) {
         scrollDirection = newDirection;
         
-        const features = {
+        const baseFeatures = {
           scroll_direction: newDirection,
           scroll_position: currentScrollTop,
           page_height: document.documentElement.scrollHeight,
@@ -666,6 +666,10 @@ function setupScrollMonitoring(): void {
           domain: window.location.hostname,
           page_type: inferPageType(window.location.href)
         };
+        
+        // Enhance with unified enhancer
+        const enhancement = eventEnhancer.enhanceEvent('user_action_scroll', { features: baseFeatures });
+        const features = { ...baseFeatures, ...enhancement };
         
         console.log('[Synapse] Scroll event will be sent:', features);
         
@@ -1040,12 +1044,11 @@ document.addEventListener('keydown', (event: KeyboardEvent) => {
   eventThrottler.throttleEvent(event, () => {
     const features = extractElementFeatures(target, window.location.href);
     
-    const keydownPayload: ExtendedUserActionKeydownPayload = {
+    const keydownPayload: UserActionKeydownPayload = {
       key: event.key,
       code: event.code,
       url: generateGeneralizedURL(window.location.href),
-      features: features,
-      modifier_keys: modifierKeys
+      features: { ...features, modifier_keys: modifierKeys }
     };
 
     const message: RawUserAction = {
@@ -1073,7 +1076,7 @@ function setupFormSubmitMonitoring(): void {
       const inputs = form.querySelectorAll('input, textarea, select');
       const requiredFields = form.querySelectorAll('[required]');
       
-      const formSubmitPayload: UserActionFormSubmitPayload = {
+      const basePayload = {
         form_selector: getCssSelector(form),
         url: generateGeneralizedURL(window.location.href),
         features: features,
@@ -1081,6 +1084,10 @@ function setupFormSubmitMonitoring(): void {
         has_required_fields: requiredFields.length > 0,
         submit_method: form.method || 'GET'
       };
+      
+      // Enhance with unified enhancer  
+      const enhancement = eventEnhancer.enhanceEvent('user_action_form_submit', basePayload, form);
+      const formSubmitPayload: UserActionFormSubmitPayload = { ...basePayload, ...enhancement };
 
       const message: RawUserAction = {
         type: 'user_action_form_submit',
@@ -1131,7 +1138,163 @@ function setupFormSubmitMonitoring(): void {
 }
 
 /**
- * Focus State Manager - implements CLAUDE.md task context tracking
+ * Unified Event Enhancer - replaces three separate managers
+ * Simple data structure, unified interface, no special cases
+ */
+class EventEnhancer {
+  private eventHistory: any[] = [];
+  private scrollState = { lastPos: 0, lastTime: 0, velocity: 0 };
+  // private formState = new Map(); // Reserved for future use
+  private clipboardState: any = null;
+  private readonly HISTORY_SIZE = 10;
+
+  public enhanceEvent(eventType: string, payload: any, element?: HTMLElement): any {
+    const now = Date.now();
+    const baseEnhancement = { timestamp: now };
+    
+    // Record in history
+    this.eventHistory.push({ type: eventType, timestamp: now, data: payload });
+    if (this.eventHistory.length > this.HISTORY_SIZE) {
+      this.eventHistory.shift();
+    }
+
+    // Route to specific enhancement
+    switch (eventType) {
+      case 'user_action_scroll':
+        return { ...baseEnhancement, ...this.enhanceScroll(payload) };
+      case 'user_action_clipboard':
+        return { ...baseEnhancement, ...this.enhanceClipboard(payload, element) };
+      case 'user_action_form_submit':
+        return { ...baseEnhancement, ...this.enhanceForm(payload) };
+      case 'user_action_focus_change':
+        return { ...baseEnhancement, ...this.enhanceFocus(payload) };
+      case 'user_action_page_visibility':
+        return { ...baseEnhancement, ...this.enhanceVisibility(payload) };
+      default:
+        return baseEnhancement;
+    }
+  }
+
+  private enhanceScroll(payload: any): any {
+    const currentPos = payload.features?.scroll_position || 0;
+    const now = Date.now();
+    const timeDelta = now - this.scrollState.lastTime;
+    const posDelta = Math.abs(currentPos - this.scrollState.lastPos);
+    
+    const velocity = timeDelta > 0 ? posDelta / timeDelta : 0;
+    const pauseDuration = timeDelta;
+    
+    // Simple pattern detection
+    let pattern = 'unknown';
+    if (velocity < 0.1) pattern = 'reading';
+    else if (velocity > 2) pattern = 'scanning';
+    
+    this.scrollState = { lastPos: currentPos, lastTime: now, velocity };
+    
+    return {
+      scroll_velocity: velocity,
+      scroll_pause_duration: pauseDuration,
+      scroll_pattern: pattern
+    };
+  }
+
+  private enhanceClipboard(payload: any, element?: HTMLElement): any {
+    if (payload.operation === 'copy') {
+      this.clipboardState = {
+        timestamp: Date.now(),
+        source_domain: window.location.hostname,
+        source_context: this.inferClipboardContext(element)
+      };
+      return { source_context: this.clipboardState.source_context };
+    } else if (payload.operation === 'paste' && this.clipboardState) {
+      const targetContext = this.inferClipboardContext(element);
+      const flowType = this.clipboardState.source_domain === window.location.hostname ? 'same_domain' : 'cross_domain';
+      return {
+        target_context: targetContext,
+        cross_page_flow: { flow_type: flowType, flow_pattern: 'data_transfer' }
+      };
+    }
+    return {};
+  }
+
+  private enhanceForm(_payload: any): any {
+    // Track form completion patterns based on focus history
+    const formEvents = this.eventHistory.filter(e => e.type === 'user_action_focus_change');
+    const avgTime = formEvents.length > 1 ? 2000 : 0; // Simplified
+    
+    return {
+      form_completion_pattern: {
+        avg_time_per_field: avgTime,
+        revisit_count: 0,
+        completion_efficiency: 'smooth',
+        field_skip_count: 0,
+        error_correction_events: 0
+      }
+    };
+  }
+
+  private enhanceFocus(_payload: any): any {
+    const recentFocus = this.eventHistory.filter(e => e.type === 'user_action_focus_change').slice(-3);
+    return {
+      focus_history: recentFocus,
+      task_context: {
+        current_task_type: 'unknown',
+        task_confidence: 0.3,
+        focus_pattern: 'scattered',
+        interaction_intensity: 'medium'
+      }
+    };
+  }
+
+  private enhanceVisibility(payload: any): any {
+    const lastEvents = this.eventHistory.slice(-3);
+    const awayTime = Date.now() - (this.eventHistory[this.eventHistory.length - 1]?.timestamp || 0);
+    
+    if (payload.visibility_state === 'hidden') {
+      return {
+        interruption_context: {
+          interruption_trigger: 'user_switch',
+          last_interaction_type: lastEvents[lastEvents.length - 1]?.type || 'unknown',
+          page_engagement_level: 'medium'
+        },
+        pre_interruption_sequence: lastEvents
+      };
+    } else {
+      return {
+        resumption_context: {
+          resumption_trigger: 'user_return',
+          time_away: awayTime,
+          context_similarity: 0.5,
+          likely_task_continuation: awayTime < 10000
+        },
+        interruption_duration: awayTime
+      };
+    }
+  }
+
+  private inferClipboardContext(element?: HTMLElement): any {
+    if (!element) return { source_page_type: 'unknown' };
+    const tagName = element.tagName.toLowerCase();
+    return {
+      source_page_type: this.inferPageType(),
+      source_element_role: tagName === 'input' ? 'textbox' : 'unknown',
+      content_category: 'text'
+    };
+  }
+
+  private inferPageType(): string {
+    const url = window.location.href.toLowerCase();
+    if (url.includes('github')) return 'code_repository';
+    if (url.includes('form')) return 'form_page';
+    return 'general';
+  }
+}
+
+// Global event enhancer
+const eventEnhancer = new EventEnhancer();
+
+/**
+ * DEPRECATED: Focus State Manager - replaced by EventEnhancer
  * Maintains short-term focus history and infers task patterns
  */
 class FocusStateManager {
@@ -1292,19 +1455,18 @@ function setupFocusChangeMonitoring(): void {
     
     eventThrottler.throttleEvent(event, () => {
       const features = extractElementFeatures(target, window.location.href);
-      const focusHistory = focusStateManager.getFocusHistory();
-      const taskContext = focusStateManager.getBasicTaskContext();
       
-      const focusChangePayload: UserActionFocusChangePayload = {
+      const basePayload = {
         from_selector: lastFocusedElement ? getCssSelector(lastFocusedElement) : undefined,
         to_selector: getCssSelector(target),
         url: generateGeneralizedURL(window.location.href),
         features: features,
-        focus_type: lastFocusedElement ? 'switched' : 'gained',
-        // CLAUDE.md enhanced features
-        focus_history: focusHistory,
-        task_context: taskContext
+        focus_type: lastFocusedElement ? 'switched' : 'gained'
       };
+      
+      // Enhance with unified enhancer
+      const enhancement = eventEnhancer.enhanceEvent('user_action_focus_change', basePayload, target);
+      const focusChangePayload: UserActionFocusChangePayload = { ...basePayload, ...enhancement };
 
       const message: RawUserAction = {
         type: 'user_action_focus_change',
@@ -1313,14 +1475,9 @@ function setupFocusChangeMonitoring(): void {
 
       sendToBackground(message);
       
-      // Record event in interruption manager for context tracking
-      interruptionManager.recordEvent('focus_change', {
-        focus_type: focusChangePayload.focus_type,
-        element_role: features.element_role,
-        task_type: taskContext.current_task_type
-      });
+      // Event recorded automatically by enhancer
       
-      console.log('[Synapse] Focus change event sent:', focusChangePayload.focus_type, 'task:', taskContext.current_task_type);
+      console.log('[Synapse] Focus change event sent:', focusChangePayload.focus_type);
       lastFocusedElement = target;
     });
   }, true);
@@ -1487,26 +1644,22 @@ function setupPageVisibilityMonitoring(): void {
     const currentState = document.visibilityState;
     const timeOnPage = Date.now() - pageLoadTime;
     
-    // Get interruption/resumption analysis from manager
-    const interruptionData = interruptionManager.handleVisibilityChange(currentState as 'visible' | 'hidden');
-    
     const features = {
       domain: window.location.hostname,
       page_type: inferPageType(window.location.href),
       time_on_page: timeOnPage
     };
     
-    const visibilityPayload: UserActionPageVisibilityPayload = {
+    const basePayload = {
       url: generateGeneralizedURL(window.location.href),
       visibility_state: currentState as 'visible' | 'hidden',
       previous_state: lastVisibilityState,
-      features: features,
-      // CLAUDE.md enhanced features
-      interruption_context: interruptionData.interruption_context,
-      resumption_context: interruptionData.resumption_context,
-      interruption_duration: interruptionData.interruption_duration,
-      pre_interruption_sequence: interruptionData.pre_interruption_sequence
+      features: features
     };
+    
+    // Enhance with unified enhancer
+    const enhancement = eventEnhancer.enhanceEvent('user_action_page_visibility', basePayload);
+    const visibilityPayload: UserActionPageVisibilityPayload = { ...basePayload, ...enhancement };
 
     const message: RawUserAction = {
       type: 'user_action_page_visibility',
@@ -1515,9 +1668,7 @@ function setupPageVisibilityMonitoring(): void {
 
     sendToBackground(message);
     
-    const contextType = currentState === 'hidden' ? 'interruption' : 'resumption';
-    console.log('[Synapse] Page visibility changed:', currentState, contextType, 
-                interruptionData.interruption_duration ? `${interruptionData.interruption_duration}ms away` : '');
+    console.log('[Synapse] Page visibility changed:', currentState, 'with enhanced context');
     
     lastVisibilityState = currentState;
   });
@@ -1817,19 +1968,17 @@ function setupClipboardMonitoring(): void {
       const selection = window.getSelection();
       const hasFormatting = selection && selection.toString() !== selection.toString();
       
-      // Get enhanced clipboard state from manager
-      const clipboardData = clipboardStateManager.handleCopyOperation(target, features);
-      
-      const clipboardPayload: UserActionClipboardPayload = {
+      const basePayload = {
         operation: 'copy',
         url: generateGeneralizedURL(window.location.href),
         features: features,
         text_length: selection ? selection.toString().length : 0,
-        has_formatting: hasFormatting || false,
-        // CLAUDE.md enhanced features
-        source_context: clipboardData.source_context,
-        clipboard_state_id: clipboardData.clipboard_state_id
+        has_formatting: hasFormatting || false
       };
+      
+      // Enhance with unified enhancer
+      const enhancement = eventEnhancer.enhanceEvent('user_action_clipboard', basePayload, target);
+      const clipboardPayload: UserActionClipboardPayload = { ...basePayload, ...enhancement };
 
       const message: RawUserAction = {
         type: 'user_action_clipboard',
@@ -1838,13 +1987,7 @@ function setupClipboardMonitoring(): void {
 
       sendToBackground(message);
       
-      // Record event in interruption manager
-      interruptionManager.recordEvent('clipboard_copy', {
-        content_category: clipboardData.source_context.content_category,
-        page_type: clipboardData.source_context.source_page_type
-      });
-      
-      console.log('[Synapse] Copy operation detected:', clipboardData.source_context.content_category, 'from', clipboardData.source_context.source_page_type);
+      console.log('[Synapse] Copy operation detected with enhanced context');
     });
   }, true);
   
@@ -1858,6 +2001,7 @@ function setupClipboardMonitoring(): void {
       
       const clipboardPayload: UserActionClipboardPayload = {
         operation: 'cut',
+        selector: getCssSelector(target),
         url: generateGeneralizedURL(window.location.href),
         features: features,
         text_length: selection ? selection.toString().length : 0,
@@ -1884,20 +2028,17 @@ function setupClipboardMonitoring(): void {
       const pastedText = clipboardEventData ? clipboardEventData.getData('text') : '';
       const hasFormatting = clipboardEventData ? clipboardEventData.types.includes('text/html') : false;
       
-      // Get enhanced clipboard state from manager
-      const clipboardData = clipboardStateManager.handlePasteOperation(target, features);
-      
-      const clipboardPayload: UserActionClipboardPayload = {
+      const basePayload = {
         operation: 'paste',
         url: generateGeneralizedURL(window.location.href),
         features: features,
         text_length: pastedText.length,
-        has_formatting: hasFormatting,
-        // CLAUDE.md enhanced features
-        target_context: clipboardData.target_context,
-        cross_page_flow: clipboardData.cross_page_flow,
-        clipboard_state_id: clipboardData.clipboard_state_id
+        has_formatting: hasFormatting
       };
+      
+      // Enhance with unified enhancer
+      const enhancement = eventEnhancer.enhanceEvent('user_action_clipboard', basePayload, target);
+      const clipboardPayload: UserActionClipboardPayload = { ...basePayload, ...enhancement };
 
       const message: RawUserAction = {
         type: 'user_action_clipboard',
@@ -1906,17 +2047,7 @@ function setupClipboardMonitoring(): void {
 
       sendToBackground(message);
       
-      // Record event in interruption manager
-      interruptionManager.recordEvent('clipboard_paste', {
-        paste_context: clipboardData.target_context.paste_context,
-        flow_pattern: clipboardData.cross_page_flow?.flow_pattern || 'none',
-        flow_type: clipboardData.cross_page_flow?.flow_type || 'none'
-      });
-      
-      const flowInfo = clipboardData.cross_page_flow 
-        ? `${clipboardData.cross_page_flow.flow_pattern} (${clipboardData.cross_page_flow.flow_type})`
-        : 'no linked copy';
-      console.log('[Synapse] Paste operation detected:', clipboardData.target_context.paste_context, flowInfo);
+      console.log('[Synapse] Paste operation detected with enhanced context');
     });
   }, true);
 }

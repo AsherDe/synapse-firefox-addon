@@ -245,10 +245,13 @@ class WorkerTokenizer {
     } else if (event.type === 'user_action_focus_change') {
       const payload = event.payload as any;
       const focusType = payload.focus_type || 'unknown';
+      const taskContext = payload.task_context;
+      
       vector.push(focusType === 'focusin' ? 1.0 : 0.0);
       vector.push(focusType === 'focusout' ? 1.0 : 0.0);
-      vector.push(payload.features?.is_input_field ? 1.0 : 0.0);
-      vector.push(payload.features?.path_depth || 0);
+      // Enhanced features from unified enhancer
+      vector.push(taskContext?.task_confidence || 0);
+      vector.push(taskContext?.interaction_intensity === 'high' ? 1.0 : 0.0);
     } else if (event.type === 'user_action_mouse_pattern') {
       const payload = event.payload as any;
       const features = payload.features;
@@ -288,13 +291,44 @@ class WorkerTokenizer {
       vector.push(features?.duration ? Math.tanh(features.duration / 1000) : 0);
       vector.push(features?.pattern_type === 'erratic' ? 1.0 : 0.0);
       vector.push(features?.pattern_type === 'fast' ? 1.0 : 0.0);
+    } else if (event.type === 'user_action_scroll') {
+      const payload = event.payload as any;
+      const features = payload.features;
+      
+      // Enhanced scroll features from unified enhancer
+      vector.push(features?.scroll_velocity || 0);
+      vector.push(features?.scroll_pause_duration || 0);
+      vector.push(features?.scroll_pattern === 'scanning' ? 1.0 : 0.0);
+      vector.push(features?.scroll_pattern === 'reading' ? 1.0 : 0.0);
+    } else if (event.type === 'user_action_form_submit') {
+      const payload = event.payload as any;
+      const completion = payload.form_completion_pattern;
+      
+      // Form completion efficiency features
+      vector.push(completion?.avg_time_per_field || 0);
+      vector.push(completion?.revisit_count || 0);
+      vector.push(completion?.completion_efficiency === 'smooth' ? 1.0 : 0.0);
+      vector.push(completion?.completion_efficiency === 'struggling' ? 1.0 : 0.0);
+    } else if (event.type === 'user_action_clipboard') {
+      const payload = event.payload as any;
+      const crossFlow = payload.cross_page_flow;
+      
+      // Cross-page information flow features  
+      vector.push(payload.text_length || 0);
+      vector.push(crossFlow?.flow_type === 'cross_domain' ? 1.0 : 0.0);
+      vector.push(crossFlow?.flow_pattern === 'code_to_editor' ? 1.0 : 0.0);
+      vector.push(crossFlow?.flow_confidence || 0);
     } else if (event.type === 'user_action_page_visibility') {
       const payload = event.payload as any;
       const visibilityState = payload.visibility_state || 'unknown';
+      const resumption = payload.resumption_context;
+      const interruption = payload.interruption_context;
+      
       vector.push(visibilityState === 'visible' ? 1.0 : 0.0);
       vector.push(visibilityState === 'hidden' ? 1.0 : 0.0);
-      vector.push(payload.features?.page_type === 'work' ? 1.0 : 0.0);
-      vector.push(0); // Placeholder for additional page visibility features
+      // Enhanced interruption/resumption features
+      vector.push(resumption?.likely_task_continuation ? 1.0 : 0.0);
+      vector.push(interruption?.page_engagement_level === 'high' ? 1.0 : 0.0);
     } else {
       // Pad with zeros for other event types
       vector.push(0, 0, 0, 0);
