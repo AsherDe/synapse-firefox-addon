@@ -126,8 +126,8 @@ function setupConnectionHandlers(): void {
       await handlePopupMessage(port, message);
     });
     
-    // Send initial data to popup
-    sendInitialDataToPopup(port);
+    // Send initial data immediately when popup connects
+    broadcastCompleteDataSnapshot(port);
   });
   
   // Smart assistant connection handler
@@ -136,6 +136,56 @@ function setupConnectionHandlers(): void {
       await handleAssistantMessage(port, message);
     });
   });
+}
+
+// Broadcast complete data snapshot to popup
+async function broadcastCompleteDataSnapshot(port?: any): Promise<void> {
+  try {
+    const sequence = await dataStorage.getSequence('globalActionSequence');
+    const pauseState = stateManager.get('extensionPaused') || false;
+    const guidanceEnabled = stateManager.get('assistantEnabled') !== false;
+    let modelInfo = stateManager.get('fullModelInfo');
+
+    // If model info is not cached yet, try to get it from MLService
+    if (!modelInfo && mlService) {
+      try {
+        const freshModelInfo = await mlService.getModelInfo();
+        if (freshModelInfo && freshModelInfo.info) {
+          modelInfo = {
+            info: freshModelInfo.info,
+            isReady: true,
+            workerReady: true,
+            workerStatus: 'ready'
+          };
+          // Cache it for future requests
+          stateManager.set('fullModelInfo', modelInfo);
+        }
+      } catch (error) {
+        console.warn('[Background] Failed to retrieve fresh model info:', error);
+      }
+    }
+
+    const data = {
+      type: 'initialData',
+      data: {
+        sequence: sequence.slice(-100),
+        paused: pauseState,
+        guidanceEnabled: guidanceEnabled,
+        modelInfo: modelInfo || { workerStatus: 'loading', isReady: false },
+        timestamp: Date.now()
+      }
+    };
+
+    if (port) {
+      // Send to specific port
+      port.postMessage(data);
+    } else {
+      // Broadcast to all popup connections
+      messageRouter.broadcast('popup', data);
+    }
+  } catch (error) {
+    console.error('[Background] Error broadcasting complete data snapshot:', error);
+  }
 }
 
 // Event handlers
@@ -469,20 +519,16 @@ async function handleGetStateMessage(): Promise<any> {
 async function handlePopupMessage(port: any, message: any): Promise<void> {
   try {
     if (message.type === 'requestInitialData') {
-      await sendInitialDataToPopup(port);
-    } else if (message.messageId) {
-      // Handle request-response pattern
-      // Get the handler from the message router
+      await broadcastCompleteDataSnapshot(port);
+    } else {
+      // Handle simple messages without response
       const handler = messageRouter.messageHandlers.get(message.type);
-      const response = await handler?.(message, null, null);
-      port.postMessage({ messageId: message.messageId, data: response });
+      if (handler) {
+        await handler(message, null, null);
+      }
     }
   } catch (error) {
     console.error('[Background] Error handling popup message:', error);
-    if (message.messageId) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      port.postMessage({ messageId: message.messageId, error: errorMessage });
-    }
   }
 }
 
@@ -498,48 +544,6 @@ async function handleAssistantMessage(port: any, message: any): Promise<void> {
   }
 }
 
-async function sendInitialDataToPopup(port: any): Promise<void> {
-  try {
-    const sequence = await dataStorage.getSequence('globalActionSequence');
-    const pauseState = stateManager.get('extensionPaused') || false;
-    // [关键修改] 直接从状态管理器获取缓存好的完整模型信息
-    let modelInfo = stateManager.get('fullModelInfo');
-
-    // If model info is not cached yet, try to get it from MLService
-    if (!modelInfo && mlService) {
-      console.log('[Background] Model info not cached, attempting to retrieve...');
-      try {
-        const freshModelInfo = await mlService.getModelInfo();
-        if (freshModelInfo && freshModelInfo.info) {
-          modelInfo = {
-            info: freshModelInfo.info,
-            isReady: true,
-            workerReady: true,
-            workerStatus: 'ready'
-          };
-          // Cache it for future requests
-          stateManager.set('fullModelInfo', modelInfo);
-          console.log('[Background] Fresh model info retrieved and cached:', modelInfo);
-        }
-      } catch (error) {
-        console.warn('[Background] Failed to retrieve fresh model info:', error);
-      }
-    }
-
-    port.postMessage({
-      type: 'initialData',
-      data: {
-        sequence: sequence.slice(-100),
-        paused: pauseState,
-        // 如果 modelInfo 存在，则直接发送；否则发送一个 loading 状态
-        modelInfo: modelInfo || { workerStatus: 'loading', isReady: false },
-        timestamp: Date.now()
-      }
-    });
-  } catch (error) {
-    console.error('[Background] Error sending initial data:', error);
-  }
-}
 
 // Initialize everything when the background script loads
 

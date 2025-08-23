@@ -11,9 +11,8 @@ class PopupController {
 
   constructor() {
     this.setupBackgroundConnection();
-  this.loadGuidanceState();
     this.setupEventListeners();
-    // All other data now loaded via background connection
+    // All data now loaded via background connection
   }
 
   /**
@@ -115,6 +114,9 @@ class PopupController {
         if (message.data.paused !== undefined) {
           this.updatePauseUI(message.data.paused);
         }
+        if (message.data.guidanceEnabled !== undefined) {
+          this.updateGuidanceUI(message.data.guidanceEnabled);
+        }
         break;
         
       case 'error':
@@ -126,49 +128,6 @@ class PopupController {
     }
   }
 
-  /**
-   * Send message to background via long-lived connection
-   */
-  private sendToBackground(message: any): Promise<any> {
-    return new Promise((resolve, reject) => {
-      if (!this.backgroundPort) {
-        // Fallback to regular message passing
-        browser.runtime.sendMessage(message, (response: any) => {
-          if (browser.runtime.lastError) {
-            reject(browser.runtime.lastError);
-          } else {
-            resolve(response);
-          }
-        });
-        return;
-      }
-      
-      // Use long-lived connection
-      const messageId = Date.now() + Math.random();
-      const messageWithId = { ...message, messageId };
-      
-      // Setup response listener
-      const responseListener = (response: any) => {
-        if (response.messageId === messageId) {
-          this.backgroundPort?.onMessage.removeListener(responseListener);
-          if (response.error) {
-            reject(new Error(response.error));
-          } else {
-            resolve(response.data);
-          }
-        }
-      };
-      
-      this.backgroundPort.onMessage.addListener(responseListener);
-      this.backgroundPort.postMessage(messageWithId);
-      
-      // Timeout after 5 seconds
-      setTimeout(() => {
-        this.backgroundPort?.onMessage.removeListener(responseListener);
-        reject(new Error('Message timeout'));
-      }, 5000);
-    });
-  }
 
   private setupEventListeners(): void {
     const clearBtn = document.getElementById('clearBtn') as HTMLButtonElement;
@@ -213,17 +172,12 @@ class PopupController {
   }
 
   private clearSequence(): void {
-    this.sendToBackground({ type: 'clearSequence' })
-      .then((response: any) => {
-        if (response && response.success) {
-          this.sequence = [];
-          this.updateSequenceDisplay();
-          console.log('Sequence cleared and UI updated.');
-        }
-      })
-      .catch((error) => {
-        console.error('Failed to clear sequence:', error);
-      });
+    // Send clear request - background will broadcast the result
+    if (this.backgroundPort) {
+      this.backgroundPort.postMessage({ type: 'clearSequence' });
+    } else {
+      browser.runtime.sendMessage({ type: 'clearSequence' });
+    }
   }
 
 
@@ -250,14 +204,6 @@ class PopupController {
     });
   }
 
-  private loadGuidanceState(): void {
-    this.sendToBackground({ type: 'getGuidanceState' })
-      .then((resp: any) => {
-        const enabled = resp?.data !== false;
-        this.updateGuidanceUI(enabled);
-      })
-      .catch(() => this.updateGuidanceUI(true));
-  }
 
   private toggleGuidance(enabled: boolean): void {
     console.log(`Smart guidance ${enabled ? 'enabled' : 'disabled'}`);
@@ -271,10 +217,10 @@ class PopupController {
       }
     });
     // Persist via background
-    this.sendToBackground({ type: 'setGuidanceState', enabled })
-      .catch(err => console.warn('[Popup] Failed to persist guidance state:', err));
-    // Legacy notification for existing handler
-    this.sendToBackground({ type: 'guidanceToggled', enabled });
+    if (this.backgroundPort) {
+      this.backgroundPort.postMessage({ type: 'setGuidanceState', enabled });
+      this.backgroundPort.postMessage({ type: 'guidanceToggled', enabled });
+    }
   }
 
   private updateGuidanceUI(enabled: boolean): void {
@@ -285,16 +231,12 @@ class PopupController {
   }
 
   private togglePause(): void {
-    this.sendToBackground({ type: 'togglePause' })
-      .then((response: any) => {
-        if (response) {
-          this.updatePauseUI(response.isPaused);
-          console.log(`Extension ${response.isPaused ? 'paused' : 'resumed'}`);
-        }
-      })
-      .catch((error) => {
-        console.error('Failed to toggle pause:', error);
-      });
+    // Send toggle request - background will broadcast the result
+    if (this.backgroundPort) {
+      this.backgroundPort.postMessage({ type: 'togglePause' });
+    } else {
+      browser.runtime.sendMessage({ type: 'togglePause' });
+    }
   }
 
   private updatePauseUI(isPaused: boolean): void {
@@ -617,19 +559,15 @@ class PopupController {
     }
 
     if (storageInfoElement) {
-      this.sendToBackground({ type: 'getStorageOverview' })
-        .then((resp: any) => {
-          const data = resp?.data || {};
-          const storageInfo = {
-            bytesInUse: data.bytesInUse || 0,
-            keys: data.keys || [],
-            lastUpdate: new Date().toISOString()
-          };
-          storageInfoElement.textContent = JSON.stringify(storageInfo, null, 2);
-        })
-        .catch(err => {
-          storageInfoElement.textContent = JSON.stringify({ error: (err as Error).message }, null, 2);
-        });
+      browser.runtime.sendMessage({ type: 'getStorageOverview' }, (response: any) => {
+        const data = response?.data || {};
+        const storageInfo = {
+          bytesInUse: data.bytesInUse || 0,
+          keys: data.keys || [],
+          lastUpdate: new Date().toISOString()
+        };
+        storageInfoElement.textContent = JSON.stringify(storageInfo, null, 2);
+      });
     }
   }
 
@@ -735,10 +673,11 @@ class PopupController {
 
   private async getSessionStorageData(): Promise<any> {
     try {
-      // In Manifest V2, session storage might not be available
-  // Delegate to background for any potential future abstraction
-  const resp = await this.sendToBackground({ type: 'getState' });
-  return { stateSnapshot: resp?.data || {} };
+      return new Promise((resolve) => {
+        browser.runtime.sendMessage({ type: 'getState' }, (response: any) => {
+          resolve({ stateSnapshot: response?.data || {} });
+        });
+      });
     } catch (error) {
       console.warn('[Synapse] Session storage error:', error);
       return {};
@@ -746,9 +685,12 @@ class PopupController {
   }
 
   private async getLocalStorageData(): Promise<any> {
-  // Use background aggregated snapshot; local storage raw dump avoided for privacy
-  const resp = await this.sendToBackground({ type: 'getState' });
-  return { stateSnapshot: resp?.data || {} };
+    // Use background aggregated snapshot; local storage raw dump avoided for privacy
+    return new Promise((resolve) => {
+      browser.runtime.sendMessage({ type: 'getState' }, (response: any) => {
+        resolve({ stateSnapshot: response?.data || {} });
+      });
+    });
   }
 
   private async getModelInfoData(): Promise<any> {
