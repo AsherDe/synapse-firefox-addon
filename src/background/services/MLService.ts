@@ -5,8 +5,8 @@
 // Browser API compatibility using webextension-polyfill
 declare var browser: any; // webextension-polyfill provides this globally
 
-import { StateManager } from './state-manager';
-import { DataStorage } from './data-storage';
+import { StateManager } from './StateManager';
+import { DataStorage } from './DataStorage';
 
 interface MLWorkerMessage {
   type: string;

@@ -2,11 +2,11 @@
  * Background Script - Main entry point with modular architecture
  */
 
-import { SynapseEvent } from './types';
-import { MessageRouter } from './core/message-router';
-import { StateManager } from './core/state-manager';
-import { DataStorage } from './core/data-storage';
-import { MLService } from './core/ml-service';
+import { SynapseEvent } from '../shared/types';
+import { MessageRouter } from './services/MessageRouter';
+import { StateManager } from './services/StateManager';
+import { DataStorage } from './services/DataStorage';
+import { MLService } from './services/MLService';
 
 // Browser API compatibility using webextension-polyfill
 declare var browser: any; // webextension-polyfill provides this globally

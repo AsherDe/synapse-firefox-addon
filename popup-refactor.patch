@@ -1,0 +1,4 @@
+diff --git a/src/popup.ts b/src/popup/index.ts
+similarity index 100%
+rename from src/popup.ts
+rename to src/popup/index.ts

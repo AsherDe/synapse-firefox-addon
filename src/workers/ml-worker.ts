@@ -4,7 +4,7 @@
  */
 
 import * as tf from '@tensorflow/tfjs';
-import { SynapseEvent } from './types';
+import { SynapseEvent } from '../shared/types';
 
 // Simple K-means implementation
 function simpleKMeans(data: number[][], k: number): number[][] {

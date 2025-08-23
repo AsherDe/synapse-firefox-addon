@@ -1,4 +1,4 @@
-import { SynapseEvent } from './types';
+import { SynapseEvent } from '../shared/types';
 // Licensed under the Apache License, Version 2.0
 
 // Browser API compatibility using webextension-polyfill

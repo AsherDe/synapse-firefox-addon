@@ -5,8 +5,8 @@
  * Licensed under the Apache License, Version 2.0
  */
 
-/// <reference path="./types.ts" />
-import { SynapseEvent, ActionSkill } from './types';
+/// <reference path="../shared/types.ts" />
+import { SynapseEvent, ActionSkill } from '../shared/types';
 
 /**
  * Page context communication with content script via postMessage
