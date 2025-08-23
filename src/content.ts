@@ -752,9 +752,8 @@ function setupScrollMonitoring(): void {
           page_type: inferPageType(window.location.href)
         };
         
-        // Enhance with unified enhancer
-        const enhancement = eventEnhancer.enhanceEvent('user_action_scroll', { features: baseFeatures });
-        const features = { ...baseFeatures, ...enhancement };
+        // Features are included in SynapseEvent payload.features
+        const features = baseFeatures;
         
         console.log('[Synapse] Scroll event will be sent:', features);
         
@@ -886,18 +885,14 @@ class MouseTrajectoryMonitor {
       page_type: inferPageType(window.location.href)
     };
     
-    const message = {
-      type: 'user_action_mouse_pattern',
-      payload: {
-        url: generateGeneralizedURL(window.location.href),
-        features: features,
-        trajectory_start: this.trajectory[0],
-        trajectory_end: this.trajectory[this.trajectory.length - 1],
-        timestamp: Date.now()
-      }
-    };
+    // Use the new unified event structure
+    const synapseEvent = createSynapseEvent('ui.mouse_pattern', null, undefined, {
+      ...features,
+      trajectory_start: this.trajectory[0],
+      trajectory_end: this.trajectory[this.trajectory.length - 1]
+    });
     
-    sendToBackground(message);
+    sendToBackground(synapseEvent);
     console.log('[Synapse] Trajectory sent with DCT compression');
   }
 
@@ -1214,20 +1209,19 @@ class EventEnhancer {
       this.eventHistory.shift();
     }
 
-    // Route to specific enhancement
-    switch (eventType) {
-      case 'user_action_scroll':
-        return { ...baseEnhancement, ...this.enhanceScroll(payload) };
-      case 'user_action_clipboard':
-        return { ...baseEnhancement, ...this.enhanceClipboard(payload, element) };
-      case 'user_action_form_submit':
-        return { ...baseEnhancement, ...this.enhanceForm(payload) };
-      case 'user_action_focus_change':
-        return { ...baseEnhancement, ...this.enhanceFocus(payload) };
-      case 'user_action_page_visibility':
-        return { ...baseEnhancement, ...this.enhanceVisibility(payload) };
-      default:
-        return baseEnhancement;
+    // Route to specific enhancement based on namespace
+    if (eventType.startsWith('user.scroll')) {
+      return { ...baseEnhancement, ...this.enhanceScroll(payload) };
+    } else if (eventType.startsWith('ui.clipboard')) {
+      return { ...baseEnhancement, ...this.enhanceClipboard(payload, element) };
+    } else if (eventType.startsWith('form.submit')) {
+      return { ...baseEnhancement, ...this.enhanceForm(payload) };
+    } else if (eventType.startsWith('ui.focus_change')) {
+      return { ...baseEnhancement, ...this.enhanceFocus(payload) };
+    } else if (eventType.startsWith('browser.page_visibility')) {
+      return { ...baseEnhancement, ...this.enhanceVisibility(payload) };
+    } else {
+      return baseEnhancement;
     }
   }
 
@@ -1275,7 +1269,7 @@ class EventEnhancer {
 
   private enhanceForm(_payload: any): any {
     // Track form completion patterns based on focus history
-    const formEvents = this.eventHistory.filter(e => e.type === 'user_action_focus_change');
+    const formEvents = this.eventHistory.filter(e => e.type.startsWith('ui.focus_change'));
     const avgTime = formEvents.length > 1 ? 2000 : 0; // Simplified
     
     return {
@@ -1290,7 +1284,7 @@ class EventEnhancer {
   }
 
   private enhanceFocus(_payload: any): any {
-    const recentFocus = this.eventHistory.filter(e => e.type === 'user_action_focus_change').slice(-3);
+    const recentFocus = this.eventHistory.filter(e => e.type.startsWith('ui.focus_change')).slice(-3);
     return {
       focus_history: recentFocus,
       task_context: {
@@ -1349,151 +1343,7 @@ class EventEnhancer {
 // Global event enhancer
 const eventEnhancer = new EventEnhancer();
 
-/**
- * DEPRECATED: Focus State Manager - replaced by EventEnhancer
- * Maintains short-term focus history and infers task patterns
- */
-class FocusStateManager {
-  private focusHistory: any[] = [];
-  private currentFocusStart: number = 0;
-  private currentElement: HTMLElement | null = null;
-  private readonly MAX_HISTORY_SIZE = 5;
-
-  public startFocus(element: HTMLElement): void {
-    // Finalize previous focus if exists
-    if (this.currentElement) {
-      this.finalizeFocus();
-    }
-
-    this.currentElement = element;
-    this.currentFocusStart = Date.now();
-  }
-
-  public finalizeFocus(): any | null {
-    if (!this.currentElement || this.currentFocusStart === 0) {
-      return null;
-    }
-
-    const duration = Date.now() - this.currentFocusStart;
-    const entry = {
-      element_role: this.inferElementRole(this.currentElement),
-      element_type: this.currentElement.tagName.toLowerCase(),
-      focus_duration: duration,
-      timestamp: this.currentFocusStart,
-      page_context: this.inferPageContext()
-    };
-
-    // Add to history (keep only last 5)
-    this.focusHistory.push(entry);
-    if (this.focusHistory.length > this.MAX_HISTORY_SIZE) {
-      this.focusHistory.shift();
-    }
-
-    // Reset current focus
-    this.currentElement = null;
-    this.currentFocusStart = 0;
-
-    return entry;
-  }
-
-  public getFocusHistory(): any[] {
-    return [...this.focusHistory];
-  }
-
-  public getBasicTaskContext(): any {
-    // Simple, fast heuristics only - complex analysis goes to worker
-    if (this.focusHistory.length < 2) {
-      return {
-        current_task_type: 'unknown',
-        task_confidence: 0.1,
-        focus_pattern: 'scattered',
-        interaction_intensity: 'low'
-      };
-    }
-
-    const roles = this.focusHistory.map(h => h.element_role);
-    const avgDuration = this.focusHistory.reduce((sum, h) => sum + h.focus_duration, 0) / this.focusHistory.length;
-    
-    // Basic quick patterns only
-    let taskType = 'unknown';
-    let confidence = 0.3;
-    
-    if (roles.includes('textbox') && roles.length >= 2) {
-      taskType = 'form_filling';
-      confidence = 0.6;
-    } else if (avgDuration > 5000) {
-      taskType = 'reading';
-      confidence = 0.5;
-    }
-    
-    let intensity: 'low' | 'medium' | 'high' = avgDuration < 2000 ? 'high' : avgDuration < 5000 ? 'medium' : 'low';
-    
-    return {
-      current_task_type: taskType,
-      task_confidence: confidence,
-      focus_pattern: 'scattered', // Let worker do pattern analysis
-      interaction_intensity: intensity
-    };
-  }
-
-  private inferElementRole(element: HTMLElement): string {
-    if (element.getAttribute('role')) {
-      return element.getAttribute('role')!;
-    }
-
-    const tagName = element.tagName.toLowerCase();
-    switch (tagName) {
-      case 'input':
-        const inputType = (element as HTMLInputElement).type;
-        return inputType === 'text' || inputType === 'email' ? 'textbox' : inputType;
-      case 'textarea':
-        return 'textbox';
-      case 'button':
-        return 'button';
-      case 'a':
-        return 'link';
-      case 'select':
-        return 'combobox';
-      default:
-        return 'generic';
-    }
-  }
-
-  private inferPageContext(): string {
-    const url = window.location.href.toLowerCase();
-    if (url.includes('github')) return 'code_repository';
-    if (url.includes('search')) return 'search_results';
-    if (url.includes('form') || url.includes('login')) return 'form_page';
-    return 'general';
-  }
-
-  private isSequentialPattern(roles: string[]): boolean {
-    // Check if roles follow a logical sequence (e.g., search -> results -> details)
-    const searchSequence = ['textbox', 'button', 'link'];
-    return this.containsSubsequence(roles, searchSequence);
-  }
-
-  private isAlternatingPattern(roles: string[]): boolean {
-    // Check if user alternates between two types of elements
-    if (roles.length < 3) return false;
-    const uniqueRoles = [...new Set(roles)];
-    return uniqueRoles.length === 2 && roles.length >= 3;
-  }
-
-  private containsSubsequence(arr: string[], subseq: string[]): boolean {
-    let subIdx = 0;
-    for (const item of arr) {
-      if (item === subseq[subIdx]) {
-        subIdx++;
-        if (subIdx === subseq.length) return true;
-      }
-    }
-    return false;
-  }
-}
-
-// Global focus state manager
-const focusStateManager = new FocusStateManager();
+// Legacy focus state manager removed - functionality moved to unified SynapseEvent system
 
 /**
  * Focus change tracking with enhanced task context analysis
@@ -1506,19 +1356,7 @@ function setupFocusChangeMonitoring(): void {
     const target = event.target as HTMLElement;
     console.log('[Synapse] Focus gained:', getCssSelector(target));
     
-    // Start tracking focus with state manager
-    focusStateManager.startFocus(target);
-    
     eventThrottler.throttleEvent(event, () => {
-      const features = extractElementFeatures(target, window.location.href);
-      
-      const basePayload = {
-        from_selector: lastFocusedElement ? getCssSelector(lastFocusedElement) : undefined,
-        to_selector: getCssSelector(target),
-        url: generateGeneralizedURL(window.location.href),
-        features: features,
-        focus_type: lastFocusedElement ? 'switched' : 'gained'
-      };
       
       // Use the new unified event structure
       const synapseEvent = createSynapseEvent('ui.focus_change', target, event, {
@@ -1552,125 +1390,9 @@ function setupFocusChangeMonitoring(): void {
   }, true);
 }
 
-/**
- * Interruption Manager - implements CLAUDE.md workflow interruption/resumption tracking
- * Captures context before interruptions and analyzes resumption patterns
- */
-class InterruptionManager {
-  private lastEventSequence: any[] = []; // Simplified event objects for content script
-  private interruptionStartTime: number = 0;
-  private preInterruptionContext: any = null;
-  private readonly MAX_SEQUENCE_SIZE = 10;
+// Legacy InterruptionManager removed - functionality moved to unified SynapseEvent system
 
-  public recordEvent(eventType: string, details: any): void {
-    // Keep a rolling window of recent events (simplified for content script)
-    const event = {
-      type: eventType,
-      timestamp: Date.now(),
-      details: details
-    };
-    
-    this.lastEventSequence.push(event);
-    if (this.lastEventSequence.length > this.MAX_SEQUENCE_SIZE) {
-      this.lastEventSequence.shift();
-    }
-  }
-
-  public handleVisibilityChange(visibilityState: 'visible' | 'hidden'): any {
-    const now = Date.now();
-    
-    if (visibilityState === 'hidden') {
-      // Page becoming hidden - record interruption context
-      this.interruptionStartTime = now;
-      
-      // Capture current context (simple version)
-      this.preInterruptionContext = {
-        last_interaction: this.getLastInteractionType(),
-        active_element: document.activeElement?.tagName.toLowerCase() || 'unknown',
-        scroll_position: window.scrollY,
-        event_count: this.lastEventSequence.length
-      };
-
-      const interruption_context = {
-        interruption_trigger: this.inferInterruptionTrigger(),
-        last_interaction_type: this.preInterruptionContext.last_interaction,
-        active_element_type: this.preInterruptionContext.active_element,
-        page_engagement_level: this.calculateEngagementLevel(),
-        scroll_position: this.preInterruptionContext.scroll_position
-      };
-
-      return {
-        interruption_context,
-        pre_interruption_sequence: [...this.lastEventSequence] // Copy for safety
-      };
-    } else {
-      // Page becoming visible - record resumption context
-      const interruption_duration = this.interruptionStartTime > 0 ? now - this.interruptionStartTime : 0;
-      
-      const resumption_context = {
-        resumption_trigger: 'user_return', // Simplified
-        time_away: interruption_duration,
-        context_similarity: this.calculateContextSimilarity(),
-        likely_task_continuation: this.isLikelyTaskContinuation(interruption_duration)
-      };
-
-      // Reset interruption state
-      this.interruptionStartTime = 0;
-      this.preInterruptionContext = null;
-
-      return {
-        resumption_context,
-        interruption_duration
-      };
-    }
-  }
-
-  private getLastInteractionType(): string {
-    if (this.lastEventSequence.length === 0) return 'unknown';
-    const lastEvent = this.lastEventSequence[this.lastEventSequence.length - 1];
-    return lastEvent.type || 'unknown';
-  }
-
-  private inferInterruptionTrigger(): 'user_switch' | 'system_switch' | 'unknown' {
-    // Simple heuristic: if last event was very recent, likely user switch
-    if (this.lastEventSequence.length > 0) {
-      const lastEvent = this.lastEventSequence[this.lastEventSequence.length - 1];
-      const timeSinceLastEvent = Date.now() - lastEvent.timestamp;
-      return timeSinceLastEvent < 1000 ? 'user_switch' : 'system_switch';
-    }
-    return 'unknown';
-  }
-
-  private calculateEngagementLevel(): 'high' | 'medium' | 'low' {
-    const recentEvents = this.lastEventSequence.filter(e => Date.now() - e.timestamp < 30000); // Last 30 seconds
-    if (recentEvents.length > 10) return 'high';
-    if (recentEvents.length > 3) return 'medium';
-    return 'low';
-  }
-
-  private calculateContextSimilarity(): number {
-    if (!this.preInterruptionContext) return 0;
-    
-    // Simple similarity based on scroll position and active element
-    const currentScroll = window.scrollY;
-    const scrollDiff = Math.abs(currentScroll - this.preInterruptionContext.scroll_position);
-    const scrollSimilarity = Math.max(0, 1 - scrollDiff / 1000); // Normalize to 0-1
-    
-    const currentActiveElement = document.activeElement?.tagName.toLowerCase() || 'unknown';
-    const elementSimilarity = currentActiveElement === this.preInterruptionContext.active_element ? 1 : 0;
-    
-    return (scrollSimilarity + elementSimilarity) / 2;
-  }
-
-  private isLikelyTaskContinuation(duration: number): boolean {
-    // Short interruptions (< 10 seconds) are likely continuations
-    // Long interruptions (> 5 minutes) are likely new tasks
-    return duration < 10000 || (duration < 300000 && this.calculateContextSimilarity() > 0.7);
-  }
-}
-
-// Global interruption manager
-const interruptionManager = new InterruptionManager();
+// Legacy interruption manager removed - functionality moved to unified SynapseEvent system
 
 /**
  * Page visibility monitoring with enhanced interruption/resumption tracking
@@ -1696,15 +1418,13 @@ function setupPageVisibilityMonitoring(): void {
       features: features
     };
     
-    // Enhance with unified enhancer
-    const enhancement = eventEnhancer.enhanceEvent('user_action_page_visibility', basePayload);
+    // All features included in SynapseEvent payload
     
     // Use the new unified event structure
     const synapseEvent = createSynapseEvent('browser.page_visibility', null, undefined, {
       visibility_state: currentState,
       previous_state: lastVisibilityState,
-      time_on_page: timeOnPage,
-      ...enhancement
+      time_on_page: timeOnPage
     });
 
     sendToBackground(synapseEvent);
@@ -1796,187 +1516,9 @@ function setupMouseHoverMonitoring(): void {
   }, true);
 }
 
-/**
- * Clipboard State Manager - implements CLAUDE.md cross-page information flow tracking
- * Links copy-paste operations across pages and analyzes information flow patterns
- */
-class ClipboardStateManager {
-  private pendingCopyState: any = null;
-  private readonly COPY_PASTE_TIMEOUT = 30000; // 30 seconds to link copy-paste
+// Legacy ClipboardStateManager removed - functionality moved to unified SynapseEvent system
 
-  public handleCopyOperation(element: HTMLElement, features: any): any {
-    const stateId = this.generateStateId();
-    const sourceContext = this.extractSourceContext(element, features);
-    
-    // Store pending copy state for future paste linking
-    this.pendingCopyState = {
-      state_id: stateId,
-      source_context: sourceContext,
-      timestamp: Date.now(),
-      source_url: window.location.href
-    };
-
-    // Clean up old state after timeout
-    setTimeout(() => {
-      if (this.pendingCopyState && this.pendingCopyState.state_id === stateId) {
-        this.pendingCopyState = null;
-      }
-    }, this.COPY_PASTE_TIMEOUT);
-
-    return {
-      source_context: sourceContext,
-      clipboard_state_id: stateId
-    };
-  }
-
-  public handlePasteOperation(element: HTMLElement, features: any): any {
-    const targetContext = this.extractTargetContext(element, features);
-    
-    if (this.pendingCopyState && this.isWithinTimeout()) {
-      // We have a matching copy operation - analyze cross-page flow
-      const crossPageFlow = this.analyzeCrossPageFlow(this.pendingCopyState.source_context, targetContext);
-      const stateId = this.pendingCopyState.state_id;
-      
-      // Clear pending state after successful match
-      this.pendingCopyState = null;
-      
-      return {
-        target_context: targetContext,
-        cross_page_flow: crossPageFlow,
-        clipboard_state_id: stateId
-      };
-    }
-
-    return {
-      target_context: targetContext
-    };
-  }
-
-  private extractSourceContext(element: HTMLElement, features: any): any {
-    return {
-      source_page_type: features.page_type || 'general',
-      source_element_role: features.element_role || 'unknown',
-      content_category: this.inferContentCategory(element, features),
-      source_domain: window.location.hostname,
-      extraction_method: this.inferExtractionMethod(element)
-    };
-  }
-
-  private extractTargetContext(element: HTMLElement, features: any): any {
-    return {
-      target_page_type: features.page_type || 'general', 
-      target_element_role: features.element_role || 'unknown',
-      target_domain: window.location.hostname,
-      paste_context: this.inferPasteContext(element),
-      target_compatibility: 'medium' // Will be analyzed in cross-page flow
-    };
-  }
-
-  private analyzeCrossPageFlow(sourceContext: any, targetContext: any): any {
-    const isSameDomain = sourceContext.source_domain === targetContext.target_domain;
-    const isCrossSite = sourceContext.source_domain.split('.').slice(-2).join('.') !== 
-                       targetContext.target_domain.split('.').slice(-2).join('.');
-
-    let flowType: 'same_domain' | 'cross_domain' | 'cross_site';
-    if (isSameDomain) {
-      flowType = 'same_domain';
-    } else if (isCrossSite) {
-      flowType = 'cross_site';
-    } else {
-      flowType = 'cross_domain';
-    }
-
-    const flowPattern = this.inferFlowPattern(sourceContext, targetContext);
-    const flowConfidence = this.calculateFlowConfidence(sourceContext, targetContext);
-    const semanticRelationship = this.inferSemanticRelationship(sourceContext, targetContext);
-
-    return {
-      flow_type: flowType,
-      flow_pattern: flowPattern,
-      flow_confidence: flowConfidence,
-      semantic_relationship: semanticRelationship
-    };
-  }
-
-  private inferContentCategory(element: HTMLElement, features: any): 'code' | 'text' | 'url' | 'data' | 'unknown' {
-    const pageType = features.page_type || '';
-    const elementRole = features.element_role || '';
-    
-    if (pageType.includes('code') || pageType.includes('github')) return 'code';
-    if (elementRole === 'textbox' || element.tagName.toLowerCase() === 'textarea') return 'text';
-    if (window.getSelection()?.toString().includes('http')) return 'url';
-    return 'text';
-  }
-
-  private inferExtractionMethod(element: HTMLElement): 'selection' | 'field_value' | 'element_text' {
-    if (element.tagName.toLowerCase() === 'input' || element.tagName.toLowerCase() === 'textarea') {
-      return 'field_value';
-    }
-    if (window.getSelection()?.toString()) {
-      return 'selection';
-    }
-    return 'element_text';
-  }
-
-  private inferPasteContext(element: HTMLElement): 'form_field' | 'editor' | 'search_box' | 'unknown' {
-    const tagName = element.tagName.toLowerCase();
-    if (tagName === 'input') {
-      const inputType = (element as HTMLInputElement).type;
-      if (inputType === 'search') return 'search_box';
-      return 'form_field';
-    }
-    if (tagName === 'textarea' || element.contentEditable === 'true') {
-      return 'editor';
-    }
-    return 'unknown';
-  }
-
-  private inferFlowPattern(source: any, target: any): 
-    'code_to_editor' | 'search_to_form' | 'data_transfer' | 'unknown' {
-    
-    if (source.content_category === 'code' && target.paste_context === 'editor') {
-      return 'code_to_editor';
-    }
-    if (source.source_page_type.includes('search') && target.paste_context === 'form_field') {
-      return 'search_to_form';
-    }
-    if (source.content_category === 'data' || source.content_category === 'url') {
-      return 'data_transfer';
-    }
-    return 'unknown';
-  }
-
-  private calculateFlowConfidence(source: any, target: any): number {
-    let confidence = 0.5; // Base confidence
-    
-    // Boost confidence for logical patterns
-    if (source.content_category === 'code' && target.paste_context === 'editor') confidence += 0.3;
-    if (source.source_page_type === target.target_page_type) confidence += 0.2;
-    if (source.source_domain === target.target_domain) confidence += 0.1;
-    
-    return Math.min(confidence, 1.0);
-  }
-
-  private inferSemanticRelationship(source: any, target: any): 
-    'related' | 'continuation' | 'independent' {
-    
-    if (source.source_domain === target.target_domain) return 'continuation';
-    if (source.source_page_type === target.target_page_type) return 'related';
-    return 'independent';
-  }
-
-  private generateStateId(): string {
-    return `clipboard_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-  }
-
-  private isWithinTimeout(): boolean {
-    return this.pendingCopyState && 
-           (Date.now() - this.pendingCopyState.timestamp) < this.COPY_PASTE_TIMEOUT;
-  }
-}
-
-// Global clipboard state manager
-const clipboardStateManager = new ClipboardStateManager();
+// Legacy clipboard state manager removed - functionality moved to unified SynapseEvent system
 
 /**
  * Clipboard operations monitoring with enhanced cross-page flow tracking
@@ -1987,27 +1529,16 @@ function setupClipboardMonitoring(): void {
     const target = event.target as HTMLElement;
     
     eventThrottler.throttleEvent(event, () => {
-      const features = extractElementFeatures(target, window.location.href);
       const selection = window.getSelection();
       const hasFormatting = selection && selection.toString() !== selection.toString();
       
-      const basePayload = {
-        operation: 'copy',
-        url: generateGeneralizedURL(window.location.href),
-        features: features,
-        text_length: selection ? selection.toString().length : 0,
-        has_formatting: hasFormatting || false
-      };
-      
-      // Enhance with unified enhancer
-      const enhancement = eventEnhancer.enhanceEvent('user_action_clipboard', basePayload, target);
+      // All features included in SynapseEvent payload
       
       // Use the new unified event structure
       const synapseEvent = createSynapseEvent('ui.clipboard', target, event, {
         operation: 'copy',
         text_length: selection ? selection.toString().length : 0,
-        has_formatting: hasFormatting || false,
-        ...enhancement
+        has_formatting: hasFormatting || false
       });
 
       sendToBackground(synapseEvent);
@@ -2021,7 +1552,6 @@ function setupClipboardMonitoring(): void {
     const target = event.target as HTMLElement;
     
     eventThrottler.throttleEvent(event, () => {
-      const features = extractElementFeatures(target, window.location.href);
       const selection = window.getSelection();
       
       // Use the new unified event structure
@@ -2041,28 +1571,17 @@ function setupClipboardMonitoring(): void {
     const target = event.target as HTMLElement;
     
     eventThrottler.throttleEvent(event, () => {
-      const features = extractElementFeatures(target, window.location.href);
       const clipboardEventData = event.clipboardData;
       const pastedText = clipboardEventData ? clipboardEventData.getData('text') : '';
       const hasFormatting = clipboardEventData ? clipboardEventData.types.includes('text/html') : false;
       
-      const basePayload = {
-        operation: 'paste',
-        url: generateGeneralizedURL(window.location.href),
-        features: features,
-        text_length: pastedText.length,
-        has_formatting: hasFormatting
-      };
-      
-      // Enhance with unified enhancer
-      const enhancement = eventEnhancer.enhanceEvent('user_action_clipboard', basePayload, target);
+      // All features included in SynapseEvent payload
       
       // Use the new unified event structure
       const synapseEvent = createSynapseEvent('ui.clipboard', target, event, {
         operation: 'paste',
         text_length: pastedText.length,
-        has_formatting: hasFormatting,
-        ...enhancement
+        has_formatting: hasFormatting
       });
 
       sendToBackground(synapseEvent);
@@ -2094,13 +1613,13 @@ initializeAllEventMonitoring();
 
 // Add debug logging for missing events
 console.log('[Synapse] All event monitoring initialized. Expected events:');
-console.log('- user_action_scroll: scroll ≥20px');
-console.log('- user_action_mouse_pattern: significance ≥0.02'); 
-console.log('- user_action_form_submit: form submit or button click');
-console.log('- user_action_focus_change: focus in/out');
-console.log('- user_action_page_visibility: visibility change');
-console.log('- user_action_mouse_hover: hover ≥100ms');
-console.log('- user_action_clipboard: copy/cut/paste');
+console.log('- user.scroll: scroll ≥20px');
+console.log('- ui.mouse_pattern: significance ≥0.02'); 
+console.log('- form.submit: form submit or button click');
+console.log('- ui.focus_change: focus in/out');
+console.log('- browser.page_visibility: visibility change');
+console.log('- ui.mouse_hover: hover ≥100ms');
+console.log('- ui.clipboard: copy/cut/paste');
 
 // Initialize smart assistant
 let smartAssistantScript: HTMLScriptElement | null = null;

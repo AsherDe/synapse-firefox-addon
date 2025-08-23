@@ -346,8 +346,8 @@ export class MLService {
     try {
   event = await this.normalizeEvent(event);
       return await this.sendToWorker({
-        type: 'processEvent',
-        data: { event }
+        type: 'processEvents',
+        data: [event]  // ml-worker expects array of events
       });
     } catch (error) {
       console.error('[MLService] Failed to process event:', error);

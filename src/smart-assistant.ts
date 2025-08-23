@@ -647,14 +647,28 @@ class SmartAssistant {
       this.recordActualUserAction(type, event);
     }
     
-    // Send to background for pattern analysis
+    // Send to background for pattern analysis using new event format
+    // Convert to appropriate SynapseEvent type based on the action
+    let eventType = 'ui.click'; // Default
+    if (type === 'keydown') eventType = 'ui.keydown';
+    else if (type === 'input') eventType = 'ui.text_input';
+    else if (type === 'focus') eventType = 'ui.focus_change';
+    
     sendToContentScript({
-      type: 'userAction',
-      data: {
-        type,
-        timestamp: Date.now(),
-        target: (event.target as Element)?.tagName,
-        // Can add more context information
+      timestamp: Date.now(),
+      type: eventType,
+      context: {
+        tabId: null,
+        windowId: null, 
+        url: window.location.href,
+        title: document.title
+      },
+      payload: {
+        targetSelector: (event.target as Element)?.tagName.toLowerCase() || 'unknown',
+        features: {
+          element_role: (event.target as Element)?.tagName.toLowerCase()
+          // Can add more context information
+        }
       }
     });
   }

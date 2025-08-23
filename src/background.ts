@@ -74,29 +74,17 @@ function setupMessageHandlers(): void {
     'ui.click': handleSynapseEvent,
     'ui.keydown': handleSynapseEvent, 
     'ui.text_input': handleSynapseEvent,
+    'ui.focus_change': handleSynapseEvent,
+    'ui.mouse_hover': handleSynapseEvent,
+    'ui.mouse_pattern': handleSynapseEvent,
+    'ui.clipboard': handleSynapseEvent,
     'user.scroll': handleSynapseEvent,
     'form.submit': handleSynapseEvent,
     'browser.tab.created': handleSynapseEvent,
     'browser.tab.activated': handleSynapseEvent,
     'browser.tab.updated': handleSynapseEvent,
     'browser.tab.removed': handleSynapseEvent,
-    
-    // Legacy event types (for backward compatibility)
-    'user_action_click': handleUserActionEvent,
-    'user_action_keydown': handleUserActionEvent,
-    'user_action_text_input': handleUserActionEvent,
-    'user_action_scroll': handleUserActionEvent,
-    'user_action_mouse_pattern': handleUserActionEvent,
-    'user_action_form_submit': handleUserActionEvent,
-    'user_action_focus_change': handleUserActionEvent,
-    'user_action_page_visibility': handleUserActionEvent,
-    'user_action_mouse_hover': handleUserActionEvent,
-    'user_action_clipboard': handleUserActionEvent,
-    'userAction': handleUserActionEvent,
-    'browser_action_tab_activated': handleBrowserActionEvent,
-    'browser_action_tab_created': handleBrowserActionEvent,
-    'browser_action_tab_removed': handleBrowserActionEvent,
-    'browser_action_tab_updated': handleBrowserActionEvent,
+    'browser.page_visibility': handleSynapseEvent,
     
     // Control messages
     'pause': handlePauseMessage,
@@ -151,7 +139,7 @@ function setupConnectionHandlers(): void {
 }
 
 // Event handlers
-async function handleSynapseEvent(message: any, sender: any): Promise<void> {
+async function handleSynapseEvent(message: any, _sender: any): Promise<void> {
   try {
     if (stateManager.get('extensionPaused')) {
       return;
@@ -165,139 +153,55 @@ async function handleSynapseEvent(message: any, sender: any): Promise<void> {
       await dataStorage.addToSequence('globalActionSequence', message);
       
       // Forward to ML service
-      mlService.processEvent(message);
+      await mlService.processEvent(message);
+      
+      // Broadcast to connected clients
+      messageRouter.broadcast('popup', {
+        type: 'eventAdded',
+        data: message
+      });
+
+      // Get latest prediction and broadcast
+      try {
+        const prediction = await mlService.getPrediction();
+        messageRouter.broadcast('popup', {
+          type: 'predictionUpdate',
+          data: prediction
+        });
+      } catch (predErr) {
+        console.warn('[Background] Prediction attempt failed (will continue):', predErr);
+      }
+      
+      // Check if training is needed
+      const sequence = await dataStorage.getSequence('globalActionSequence');
+      if (sequence.length % 50 === 0 && sequence.length >= 20) {
+        try {
+          await mlService.trainModel();
+          console.log('[Background] Model training completed');
+          // Post-train prediction update
+          try {
+            const postTrainPrediction = await mlService.getPrediction();
+            messageRouter.broadcast('popup', {
+              type: 'predictionUpdate',
+              data: postTrainPrediction
+            });
+          } catch (e) {
+            console.warn('[Background] Post-train prediction failed:', e);
+          }
+        } catch (error) {
+          console.error('[Background] Training failed:', error);
+        }
+      }
       
       return;
     }
     
-    // Not a SynapseEvent - might be legacy format or control message
-    // Fall back to old handling logic
+    console.warn('[Background] Received malformed event:', message);
   } catch (error) {
     console.error('[Background] Error handling SynapseEvent:', error);
   }
 }
 
-async function handleUserActionEvent(message: any, sender: any): Promise<void> {
-  try {
-    if (stateManager.get('extensionPaused')) {
-      return;
-    }
-
-    // Build event with required context structure
-    const tabId: number | null = sender.tab?.id ?? null;
-    const windowId: number | null = sender.tab?.windowId ?? null;
-    let tabInfo: chrome.tabs.Tab | undefined = sender.tab;
-    if (!tabInfo && tabId !== null) {
-      try {
-        tabInfo = await browser.tabs.get(tabId);
-      } catch {
-        // ignore
-      }
-    }
-
-    const event: any = {
-      type: message.type,
-      payload: message.payload,
-      timestamp: Date.now(),
-      context: {
-        tabId,
-        windowId,
-        tabInfo
-      }
-    };
-
-    // Add to sequence
-    await dataStorage.addToSequence('globalActionSequence', event);
-    
-    // Process with ML service
-    try {
-      await mlService.processEvent(event);
-    } catch (error) {
-      console.error('[Background] ML processing failed:', error);
-    }
-    
-    // Broadcast to connected clients
-    messageRouter.broadcast('popup', {
-      type: 'eventAdded',
-      data: event
-    });
-
-    // 获取最新预测并广播（打通事件->预测->UI 链路）
-    try {
-      const prediction = await mlService.getPrediction();
-      messageRouter.broadcast('popup', {
-        type: 'predictionUpdate',
-        data: prediction
-      });
-    } catch (predErr) {
-      console.warn('[Background] Prediction attempt failed (will continue):', predErr);
-    }
-    
-    // Check if training is needed
-    const sequence = await dataStorage.getSequence('globalActionSequence');
-    if (sequence.length % 50 === 0 && sequence.length >= 20) {
-      try {
-        await mlService.trainModel();
-        console.log('[Background] Model training completed');
-        // 训练完成后再触发一次预测更新（模型可能改善）
-        try {
-          const postTrainPrediction = await mlService.getPrediction();
-          messageRouter.broadcast('popup', {
-            type: 'predictionUpdate',
-            data: postTrainPrediction
-          });
-        } catch (e) {
-          console.warn('[Background] Post-train prediction failed:', e);
-        }
-      } catch (error) {
-        console.error('[Background] Training failed:', error);
-      }
-    }
-    
-  } catch (error) {
-    console.error('[Background] Error handling user action:', error);
-  }
-}
-
-async function handleBrowserActionEvent(message: any, sender: any): Promise<void> {
-  try {
-    if (stateManager.get('extensionPaused')) {
-      return;
-    }
-
-    const tabId: number | null = sender.tab?.id ?? null;
-    const windowId: number | null = sender.tab?.windowId ?? null;
-    let tabInfo: chrome.tabs.Tab | undefined = sender.tab;
-    if (!tabInfo && tabId !== null) {
-      try {
-        tabInfo = await browser.tabs.get(tabId);
-      } catch {
-        // ignore
-      }
-    }
-
-    const event: any = {
-      type: message.type,
-      payload: message.payload,
-      timestamp: Date.now(),
-      context: {
-        tabId,
-        windowId,
-        tabInfo
-      }
-    };
-
-    await dataStorage.addToSequence('globalActionSequence', event);
-    
-    messageRouter.broadcast('popup', {
-      type: 'eventAdded',
-      data: event
-    });
-    
-  } catch (error) {
-    console.error('[Background] Error handling browser action:', error);
-  }
-}
 
 async function handlePauseMessage(): Promise<any> {
   stateManager.set('extensionPaused', true);
