@@ -403,16 +403,97 @@
         }
 
         .dev-data {
-            background: #f8f9fa;
-            border: 1px solid #dadce0;
-            border-radius: 4px;
-            padding: 12px;
-            font-family: 'Courier New', monospace;
+            background: #1e1e1e;
+            color: #d4d4d4;
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 16px;
+            font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
             font-size: 12px;
-            line-height: 1.4;
-            max-height: 200px;
+            line-height: 1.5;
+            max-height: 300px;
             overflow-y: auto;
             white-space: pre-wrap;
+            position: relative;
+        }
+
+        .dev-data::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        .dev-data::-webkit-scrollbar-track {
+            background: #2d2d2d;
+        }
+
+        .dev-data::-webkit-scrollbar-thumb {
+            background: #404040;
+            border-radius: 4px;
+        }
+
+        .dev-data::-webkit-scrollbar-thumb:hover {
+            background: #555;
+        }
+
+        /* JSON Syntax Highlighting */
+        .json-key {
+            color: #9cdcfe;
+            font-weight: 500;
+        }
+
+        .json-string {
+            color: #ce9178;
+        }
+
+        .json-number {
+            color: #b5cea8;
+        }
+
+        .json-boolean {
+            color: #569cd6;
+            font-weight: 600;
+        }
+
+        .json-null {
+            color: #569cd6;
+            font-style: italic;
+        }
+
+        .json-punctuation {
+            color: #d4d4d4;
+        }
+
+        .loading-indicator {
+            color: #ffcc02;
+            animation: pulse 1.5s infinite;
+        }
+
+        .error-text {
+            color: #f48771;
+            background: #2d1b1b;
+            border: 1px solid #4a2626;
+        }
+
+        .refresh-btn {
+            margin: 10px 0;
+            padding: 8px 16px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 500;
+            transition: all 0.2s ease;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        .refresh-btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        }
+
+        .refresh-btn:active {
+            transform: translateY(0);
         }
 
         .guidance-container {
