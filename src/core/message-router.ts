@@ -30,17 +30,30 @@ export class MessageRouter {
         if (handler) {
           const result = await handler(message, sender, sendResponse);
           if (result !== undefined) {
-            sendResponse(result);
+            // If message has messageId, preserve it in the response
+            if (message.messageId) {
+              sendResponse({ messageId: message.messageId, data: result });
+            } else {
+              sendResponse(result);
+            }
           }
           return true; // Keep the message channel open for async responses
         } else {
           console.warn(`[MessageRouter] No handler found for message type: ${message.type}`);
-          sendResponse({ error: `Unknown message type: ${message.type}` });
+          const errorResponse: any = { error: `Unknown message type: ${message.type}` };
+          if (message.messageId) {
+            errorResponse.messageId = message.messageId;
+          }
+          sendResponse(errorResponse);
         }
       } catch (error) {
         console.error(`[MessageRouter] Error handling message:`, error);
         const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-        sendResponse({ error: errorMessage });
+        const errorResponse: any = { error: errorMessage };
+        if (message.messageId) {
+          errorResponse.messageId = message.messageId;
+        }
+        sendResponse(errorResponse);
       }
       return true;
     });

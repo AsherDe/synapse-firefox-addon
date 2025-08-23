@@ -394,4 +394,11 @@ self.onmessage = async (e) => {
   }
 };
 
+// Send worker_ready signal when worker is initialized
+self.postMessage({ 
+  type: 'worker_ready', 
+  success: true,
+  data: { status: 'ready', timestamp: Date.now() }
+});
+
 export default SynapseMLWorker;

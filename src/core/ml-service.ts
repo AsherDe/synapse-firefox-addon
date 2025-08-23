@@ -87,6 +87,10 @@ export class MLService {
   }
 
   private handleWorkerMessage(message: MLWorkerResponse): void {
+    if (!message || !message.type) {
+      console.warn('[MLService] Received an invalid or untyped message from worker:', message);
+      return;
+    }
     console.log('[MLService] Received from worker:', message.type);
 
     // Handle responses to specific requests
