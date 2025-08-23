@@ -1,0 +1,71 @@
+diff --git a/src/content/monitors/ScrollMonitor.ts b/src/content/monitors/ScrollMonitor.ts
+new file mode 100644
+index 0000000..b2c3d4e
+--- /dev/null
++++ b/src/content/monitors/ScrollMonitor.ts
+@@ -0,0 +1,65 @@
++import { createSynapseEvent, inferPageType } from '../feature-extractor';
++import { sendToBackground, EventThrottler, AdvancedEventThrottler } from '../../shared/utils';
++
++const eventThrottler = new EventThrottler();
++const advancedThrottler = new AdvancedEventThrottler();
++
++/**
++ * Monitor scroll behavior with throttling
++ */
++export function setupScrollMonitoring(): void {
++  let lastScrollTop = 0;
++  let scrollDirection = 'none';
++  
++  document.addEventListener('scroll', (event) => {
++    const currentScrollTop = window.pageYOffset || document.documentElement.scrollTop;
++    const scrollDistance = Math.abs(currentScrollTop - lastScrollTop);
++    console.log('[Synapse] Scroll detected:', currentScrollTop, 'distance:', scrollDistance);
++    
++    advancedThrottler.throttle('scroll', () => {
++      const newDirection = currentScrollTop > lastScrollTop ? 'down' : 'up';
++      
++      console.log('[Synapse] Scroll throttle check:', 
++                  'direction:', newDirection, 'vs', scrollDirection,
++                  'distance:', Math.abs(currentScrollTop - lastScrollTop), '> 20?');
++      
++      if (newDirection !== scrollDirection || Math.abs(currentScrollTop - lastScrollTop) > 20) {
++        scrollDirection = newDirection;
++        
++        const baseFeatures = {
++          scroll_direction: newDirection,
++          scroll_position: currentScrollTop,
++          page_height: document.documentElement.scrollHeight,
++          viewport_height: window.innerHeight,
++          scroll_percentage: (currentScrollTop / (document.documentElement.scrollHeight - window.innerHeight)) * 100,
++          domain: window.location.hostname,
++          page_type: inferPageType(window.location.href)
++        };
++        
++        const features = baseFeatures;
++        
++        console.log('[Synapse] Scroll event will be sent:', features);
++        
++        eventThrottler.throttleEvent(event, () => {
++          const synapseEvent = createSynapseEvent('user.scroll', null, event, {
++            scroll_direction: newDirection,
++            scroll_position: currentScrollTop,
++            page_height: document.documentElement.scrollHeight,
++            viewport_height: window.innerHeight,
++            scroll_percentage: (currentScrollTop / (document.documentElement.scrollHeight - window.innerHeight)) * 100,
++            domain: window.location.hostname,
++            page_type: inferPageType(window.location.href)
++          });
++          
++          console.log('[Synapse] Scroll event sent:', synapseEvent);
++          sendToBackground(synapseEvent);
++        });
++        
++      } else {
++        console.log('[Synapse] Scroll event skipped - conditions not met');
++      }
++      lastScrollTop = currentScrollTop;
++    }, 500);
++  }, { passive: true });
++}
++

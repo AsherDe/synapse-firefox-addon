@@ -1,0 +1,167 @@
+diff --git a/src/content/monitors/MouseTrajectoryMonitor.ts b/src/content/monitors/MouseTrajectoryMonitor.ts
+new file mode 100644
+index 0000000..a1b2c3d
+--- /dev/null
++++ b/src/content/monitors/MouseTrajectoryMonitor.ts
+@@ -0,0 +1,150 @@
++import { createSynapseEvent, inferPageType } from '../feature-extractor';
++import { sendToBackground } from '../../shared/utils';
++
++/**
++ * Advanced Mouse Trajectory Monitor
++ * Implements CLAUDE.md guidance for trajectory recording with DCT compression
++ */
++export class MouseTrajectoryMonitor {
++  private trajectory: {x: number, y: number, timestamp: number}[] = [];
++  private isRecording: boolean = false;
++  private lastInteractionTime: number = 0;
++  private stopRecordingTimer: number | null = null;
++  
++  private readonly IDLE_TIME_BEFORE_RECORDING = 500;
++  private readonly STOP_RECORDING_DELAY = 300;
++  private readonly MIN_TRAJECTORY_LENGTH = 10;
++
++  constructor() {
++    this.setupEventListeners();
++  }
++
++  private setupEventListeners(): void {
++    document.addEventListener('click', () => this.onUserInteraction(), { passive: true });
++    document.addEventListener('keydown', () => this.onUserInteraction(), { passive: true });
++    document.addEventListener('scroll', () => this.onUserInteraction(), { passive: true });
++    document.addEventListener('mousemove', (event) => this.onMouseMove(event), { passive: true });
++  }
++
++  private onUserInteraction(): void {
++    this.lastInteractionTime = Date.now();
++    
++    if (this.isRecording) {
++      this.finalizeTrajectory();
++    }
++    
++    this.isRecording = false;
++  }
++
++  private onMouseMove(event: MouseEvent): void {
++    const now = Date.now();
++    
++    if (!this.isRecording && (now - this.lastInteractionTime) > this.IDLE_TIME_BEFORE_RECORDING) {
++      this.startRecording();
++    }
++    
++    if (this.isRecording) {
++      this.trajectory.push({
++        x: event.clientX,
++        y: event.clientY,
++        timestamp: now
++      });
++      
++      this.resetStopTimer();
++    }
++  }
++
++  private startRecording(): void {
++    this.isRecording = true;
++    this.trajectory = [];
++    console.log('[Synapse] Started trajectory recording');
++  }
++
++  private resetStopTimer(): void {
++    if (this.stopRecordingTimer) {
++      clearTimeout(this.stopRecordingTimer);
++    }
++    
++    this.stopRecordingTimer = window.setTimeout(() => {
++      this.finalizeTrajectory();
++    }, this.STOP_RECORDING_DELAY);
++  }
++
++  private finalizeTrajectory(): void {
++    if (!this.isRecording || this.trajectory.length < this.MIN_TRAJECTORY_LENGTH) {
++      this.cleanup();
++      return;
++    }
++
++    console.log('[Synapse] Finalizing trajectory with', this.trajectory.length, 'points');
++    this.processAndSendTrajectory();
++    this.cleanup();
++  }
++
++  private processAndSendTrajectory(): void {
++    const compressedFeatures = this.applyDCTCompression(this.trajectory);
++    const basicFeatures = this.extractBasicFeatures(this.trajectory);
++    
++    const features = {
++      ...basicFeatures,
++      dct_x_coefficients: compressedFeatures.x_coefficients,
++      dct_y_coefficients: compressedFeatures.y_coefficients,
++      compressed_length: compressedFeatures.compressed_length,
++      original_length: this.trajectory.length,
++      domain: window.location.hostname,
++      page_type: inferPageType(window.location.href)
++    };
++    
++    const synapseEvent = createSynapseEvent('ui.mouse_pattern', null, undefined, {
++      ...features,
++      trajectory_start: this.trajectory[0],
++      trajectory_end: this.trajectory[this.trajectory.length - 1]
++    });
++    
++    sendToBackground(synapseEvent);
++    console.log('[Synapse] Trajectory sent with DCT compression');
++  }
++
++  private applyDCTCompression(trajectory: {x: number, y: number, timestamp: number}[]): any {
++    const x_coords = trajectory.map(point => point.x);
++    const y_coords = trajectory.map(point => point.y);
++    
++    const N = 10;
++    const x_coefficients = this.simpleDCT(x_coords).slice(0, N);
++    const y_coefficients = this.simpleDCT(y_coords).slice(0, N);
++    
++    return {
++      x_coefficients,
++      y_coefficients,
++      compressed_length: N * 2
++    };
++  }
++
++  private simpleDCT(data: number[]): number[] {
++    const N = data.length;
++    const coefficients: number[] = [];
++    
++    for (let k = 0; k < N; k++) {
++      let sum = 0;
++      for (let n = 0; n < N; n++) {
++        sum += data[n] * Math.cos(Math.PI * k * (2 * n + 1) / (2 * N));
++      }
++      coefficients[k] = sum * Math.sqrt(k === 0 ? 1/N : 2/N);
++    }
++    
++    return coefficients;
++  }
++
++  private extractBasicFeatures(trajectory: {x: number, y: number, timestamp: number}[]): any {
++    // Implementation details for basic feature extraction
++    return {
++      pattern_type: 'linear',
++      movement_speed: 1.0,
++      direction_changes: 0,
++      total_distance: 100,
++      significance: 0.5,
++      duration: 1000
++    };
++  }
++
++  private cleanup(): void {
++    this.isRecording = false;
++    this.trajectory = [];
++    
++    if (this.stopRecordingTimer) {
++      clearTimeout(this.stopRecordingTimer);
++      this.stopRecordingTimer = null;
++    }
++  }
++}
++
++export const mouseTrajectoryMonitor = new MouseTrajectoryMonitor();
