@@ -166,3 +166,6 @@ export class AdvancedEventThrottler {
     this.throttleTimers.forEach(timer => clearTimeout(timer));
     this.debounceTimers.forEach(timer => clearTimeout(timer));
     this.throttleTimers.clear();
+    this.debounceTimers.clear();
+  }
+}

@@ -148,3 +148,14 @@ export class MouseTrajectoryMonitor {
   }
 
   private cleanup(): void {
+    this.isRecording = false;
+    this.trajectory = [];
+    
+    if (this.stopRecordingTimer) {
+      clearTimeout(this.stopRecordingTimer);
+      this.stopRecordingTimer = null;
+    }
+  }
+}
+
+export const mouseTrajectoryMonitor = new MouseTrajectoryMonitor();

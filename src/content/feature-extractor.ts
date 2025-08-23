@@ -239,3 +239,24 @@ export function createSynapseEvent(
       features.scrollX = window.scrollX;
       features.documentHeight = document.documentElement.scrollHeight;
       features.viewportHeight = window.innerHeight;
+      features.scrollPercentage = (window.scrollY / (document.documentElement.scrollHeight - window.innerHeight)) * 100;
+    }
+  }
+
+  return {
+    timestamp: now,
+    type,
+    context: {
+      tabId,
+      windowId, 
+      url: generateGeneralizedURL(url),
+      title
+    },
+    payload: {
+      targetSelector,
+      value,
+      position,
+      features
+    }
+  };
+}
