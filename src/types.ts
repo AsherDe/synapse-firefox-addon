@@ -78,6 +78,10 @@ interface UserActionFocusChangePayload {
   url: string;
   features: GeneralizedEventFeatures;
   focus_type: 'gained' | 'lost' | 'switched';
+  // Task context features for focus change tracking
+  focus_duration?: number; // Time spent focused on element (ms)
+  focus_history?: FocusHistoryEntry[]; // Recent focus history (last 5 entries)
+  task_context?: TaskContext; // Inferred task context from focus patterns
 }
 
 interface UserActionPageVisibilityPayload {
@@ -89,6 +93,11 @@ interface UserActionPageVisibilityPayload {
     page_type: string;
     time_on_page?: number;
   };
+  // Interruption and resumption tracking features
+  interruption_context?: InterruptionContext; // Context before interruption
+  resumption_context?: ResumptionContext; // Context when resuming
+  interruption_duration?: number; // Duration of interruption (ms)
+  pre_interruption_sequence?: EnrichedEvent[]; // Last N events before interruption
 }
 
 interface UserActionMouseHoverPayload {
@@ -106,6 +115,11 @@ interface UserActionClipboardPayload {
   features: GeneralizedEventFeatures;
   text_length?: number;
   has_formatting?: boolean;
+  // Cross-page information flow tracking
+  source_context?: ClipboardSourceContext; // Source context for copy operations
+  target_context?: ClipboardTargetContext; // Target context for paste operations
+  cross_page_flow?: CrossPageFlowInfo; // Cross-page flow analysis
+  clipboard_state_id?: string; // Unique ID to link copy-paste pairs
 }
 
 // The core structure for any browser-level event captured by the background script
@@ -294,11 +308,67 @@ interface ActionSkill {
   confidence: number;        // 技能识别的置信度
 }
 
-// 高层次技能事件
+// High-level skill events
 interface SkillEvent extends BaseEvent {
   type: 'skill_action';
   payload: {
     skill: ActionSkill;
-    original_events: EnrichedEvent[]; // 构成该技能的原始事件
+    original_events: EnrichedEvent[]; // Original events that compose this skill
   };
+}
+
+// Focus change task context types
+interface FocusHistoryEntry {
+  element_role: string;
+  element_type: string;
+  focus_duration: number;
+  timestamp: number;
+  page_context: string;
+}
+
+interface TaskContext {
+  current_task_type: string; // 'iterative_search' | 'form_filling' | 'reading' | 'unknown'
+  task_confidence: number; // Confidence level in task identification
+  focus_pattern: string; // 'sequential' | 'alternating' | 'scattered'
+  interaction_intensity: 'low' | 'medium' | 'high';
+}
+
+// Page visibility interruption/resumption types
+interface InterruptionContext {
+  interruption_trigger: 'user_switch' | 'system_switch' | 'unknown';
+  last_interaction_type: string;
+  active_element_type?: string;
+  page_engagement_level: 'high' | 'medium' | 'low';
+  scroll_position?: number;
+}
+
+interface ResumptionContext {
+  resumption_trigger: 'user_return' | 'tab_focus' | 'unknown';
+  time_away: number; // Time away from page (ms)
+  context_similarity: number; // Similarity to pre-interruption context
+  likely_task_continuation: boolean; // Whether user likely continues previous task
+}
+
+// Clipboard cross-page information flow types
+interface ClipboardSourceContext {
+  source_page_type: string;
+  source_element_role: string;
+  content_category: 'code' | 'text' | 'url' | 'data' | 'unknown';
+  source_domain: string;
+  extraction_method: 'selection' | 'field_value' | 'element_text';
+}
+
+interface ClipboardTargetContext {
+  target_page_type: string;
+  target_element_role: string;
+  target_domain: string;
+  paste_context: 'form_field' | 'editor' | 'search_box' | 'unknown';
+  target_compatibility: 'high' | 'medium' | 'low'; // Compatibility with source content
+}
+
+interface CrossPageFlowInfo {
+  flow_type: 'same_domain' | 'cross_domain' | 'cross_site';
+  flow_pattern: 'code_to_editor' | 'search_to_form' | 'data_transfer' | 'unknown';
+  flow_confidence: number; // Confidence in information flow identification
+  semantic_relationship: 'related' | 'continuation' | 'independent';
 }

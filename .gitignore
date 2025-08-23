@@ -1,5 +1,6 @@
 # Project files to exclude
 CLAUDE.md
+CLAUDE.local.md
 
 # Dependencies
 node_modules/
