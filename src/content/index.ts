@@ -8,6 +8,7 @@ import { setupFormSubmitMonitoring } from './monitors/FormMonitor';
 import { setupPageVisibilityMonitoring } from './monitors/VisibilityMonitor';
 import { setupMouseHoverMonitoring } from './monitors/HoverMonitor';
 import { setupSmartAssistantBridge } from './smart-assistant-bridge';
+import { FloatingControlCenter } from './FloatingControlCenter';
 import './monitors/TextInputAggregator';
 import './monitors/MouseTrajectoryMonitor';
 
@@ -94,4 +95,49 @@ console.log('- ui.clipboard: copy/cut/paste');
 // Initialize smart assistant bridge
 setupSmartAssistantBridge();
 
-console.log('[Synapse] Content script loaded with complete event monitoring suite and smart assistant.');
+// Initialize floating control center
+let floatingControlCenter: FloatingControlCenter | null = null;
+
+function initializeFloatingControlCenter(): void {
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => {
+      floatingControlCenter = new FloatingControlCenter();
+      // Show by default for easy access
+      setTimeout(() => {
+        if (floatingControlCenter) {
+          floatingControlCenter.show();
+        }
+      }, 1000);
+    });
+  } else {
+    floatingControlCenter = new FloatingControlCenter();
+    // Show by default for easy access
+    setTimeout(() => {
+      if (floatingControlCenter) {
+        floatingControlCenter.show();
+      }
+    }, 1000);
+  }
+}
+
+// Listen for messages from background script
+browser.runtime.onMessage.addListener((message: any) => {
+  if (!floatingControlCenter) return;
+  
+  switch (message.type) {
+    case 'SHOW_FLOATING_CONTROL':
+      floatingControlCenter.show();
+      break;
+    case 'HIDE_FLOATING_CONTROL':
+      floatingControlCenter.hide();
+      break;
+    case 'TOGGLE_FLOATING_CONTROL':
+      floatingControlCenter.toggle();
+      break;
+  }
+});
+
+// Initialize floating control center
+initializeFloatingControlCenter();
+
+console.log('[Synapse] Content script loaded with complete event monitoring suite, smart assistant, and floating control center.');

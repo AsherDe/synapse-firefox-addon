@@ -338,3 +338,8 @@ export class StyleInjector {
       }
       
       .feedback-comment::placeholder {
+        color: rgba(255,255,255,0.5);
+      }
+    `;
+  }
+}

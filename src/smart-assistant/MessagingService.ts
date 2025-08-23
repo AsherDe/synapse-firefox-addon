@@ -118,3 +118,5 @@ export class MessagingService {
 
   public isReady(): boolean {
     return this.isInitialized;
+  }
+}

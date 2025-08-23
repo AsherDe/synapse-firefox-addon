@@ -116,6 +116,13 @@ function setupMessageHandlers(): void {
     'getCodebookInfo': handleGetCodebookInfoMessage,
   'getVocabulary': handleGetVocabularyMessage,
   'getState': handleGetStateMessage,
+    
+    // Floating control center messages
+    'FLOATING_CONTROL_TOGGLE_MONITORING': handleFloatingControlToggleMonitoring,
+    'FLOATING_CONTROL_EXPORT_DATA': handleFloatingControlExportData,
+    'FLOATING_CONTROL_TOGGLE_SMART_ASSISTANT': handleFloatingControlToggleSmartAssistant,
+    'FLOATING_CONTROL_OPEN_DEBUG_TOOLS': handleFloatingControlOpenDebugTools,
+    'FLOATING_CONTROL_OPEN_SETTINGS': handleFloatingControlOpenSettings,
   });
 }
 
@@ -213,6 +220,19 @@ async function handleSynapseEvent(message: any, _sender: any): Promise<void> {
           type: 'predictionUpdate',
           data: prediction
         });
+        
+        // Send to all content scripts for confidence display
+        const tabs = await browser.tabs.query({});
+        tabs.forEach((tab: any) => {
+          if (tab.id) {
+            browser.tabs.sendMessage(tab.id, { 
+              type: 'PREDICTION_UPDATE', 
+              data: { confidence: prediction.confidence * 100 } // Convert to percentage
+            }).catch(() => {
+              // Tab might not have content script, ignore
+            });
+          }
+        });
       } catch (predErr) {
         console.warn('[Background] Prediction attempt failed (will continue):', predErr);
       }
@@ -229,6 +249,19 @@ async function handleSynapseEvent(message: any, _sender: any): Promise<void> {
             messageRouter.broadcast('popup', {
               type: 'predictionUpdate',
               data: postTrainPrediction
+            });
+            
+            // Send to all content scripts for confidence display
+            const tabs = await browser.tabs.query({});
+            tabs.forEach((tab: any) => {
+              if (tab.id) {
+                browser.tabs.sendMessage(tab.id, { 
+                  type: 'PREDICTION_UPDATE', 
+                  data: { confidence: postTrainPrediction.confidence * 100 } // Convert to percentage
+                }).catch(() => {
+                  // Tab might not have content script, ignore
+                });
+              }
             });
           } catch (e) {
             console.warn('[Background] Post-train prediction failed:', e);
@@ -504,6 +537,111 @@ async function handleGetStateMessage(): Promise<any> {
         modelReady
       }
     };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    return { success: false, error: errorMessage };
+  }
+}
+
+// Floating Control Center handlers
+async function handleFloatingControlToggleMonitoring(): Promise<any> {
+  try {
+    const currentState = stateManager.get('extensionPaused') || false;
+    const newState = !currentState;
+    
+    stateManager.set('extensionPaused', newState);
+    messageRouter.broadcast('popup', { type: 'pauseStateChanged', data: newState });
+    
+    // Send to all content scripts to show/hide the control center feedback
+    const tabs = await browser.tabs.query({});
+    tabs.forEach((tab: any) => {
+      if (tab.id) {
+        browser.tabs.sendMessage(tab.id, { 
+          type: 'MONITORING_STATE_CHANGED', 
+          data: { monitoring: !newState } 
+        }).catch(() => {
+          // Tab might not have content script, ignore
+        });
+      }
+    });
+    
+    return { success: true, monitoring: !newState };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    return { success: false, error: errorMessage };
+  }
+}
+
+async function handleFloatingControlExportData(): Promise<any> {
+  try {
+    const data = await dataStorage.exportData();
+    
+    // Send to all content scripts to show export success
+    const tabs = await browser.tabs.query({ active: true, currentWindow: true });
+    if (tabs[0]?.id) {
+      browser.tabs.sendMessage(tabs[0].id, { 
+        type: 'SHOW_NOTIFICATION', 
+        data: { message: 'Data exported successfully', type: 'success' } 
+      }).catch(() => {
+        // Tab might not have content script, ignore
+      });
+    }
+    
+    return { success: true, data };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    return { success: false, error: errorMessage };
+  }
+}
+
+async function handleFloatingControlToggleSmartAssistant(): Promise<any> {
+  try {
+    const currentState = stateManager.get('assistantEnabled') !== false;
+    const newState = !currentState;
+    
+    stateManager.set('assistantEnabled', newState);
+    stateManager.markAsPersistent('assistantEnabled');
+    
+    // Send to all content scripts
+    const tabs = await browser.tabs.query({});
+    tabs.forEach((tab: any) => {
+      if (tab.id) {
+        browser.tabs.sendMessage(tab.id, { 
+          type: 'ASSISTANT_STATE_CHANGED', 
+          data: { enabled: newState } 
+        }).catch(() => {
+          // Tab might not have content script, ignore
+        });
+      }
+    });
+    
+    return { success: true, enabled: newState };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    return { success: false, error: errorMessage };
+  }
+}
+
+async function handleFloatingControlOpenDebugTools(): Promise<any> {
+  try {
+    // Open popup in new tab for debug tools access
+    const popupUrl = browser.runtime.getURL('popup.html');
+    await browser.tabs.create({ url: popupUrl });
+    
+    return { success: true };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    return { success: false, error: errorMessage };
+  }
+}
+
+async function handleFloatingControlOpenSettings(): Promise<any> {
+  try {
+    // Open extension options page or popup
+    const optionsUrl = browser.runtime.getURL('popup.html');
+    await browser.tabs.create({ url: optionsUrl });
+    
+    return { success: true };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     return { success: false, error: errorMessage };
