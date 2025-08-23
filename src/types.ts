@@ -9,7 +9,7 @@
 // The core structure for any event message sent from a content script
 interface RawUserAction {
   type: 'user_action_click' | 'user_action_keydown' | 'user_action_text_input' | 'user_action_scroll' | 'user_action_mouse_pattern' | 'user_action_form_submit' | 'user_action_focus_change' | 'user_action_page_visibility' | 'user_action_mouse_hover' | 'user_action_clipboard';
-  payload: UserActionClickPayload | UserActionKeydownPayload | UserActionTextInputPayload | ExtendedUserActionClickPayload | ExtendedUserActionKeydownPayload | UserActionScrollPayload | UserActionMousePatternPayload | UserActionFormSubmitPayload | UserActionFocusChangePayload | UserActionPageVisibilityPayload | UserActionMouseHoverPayload | UserActionClipboardPayload;
+  payload: UserActionClickPayload | UserActionKeydownPayload | UserActionTextInputPayload | UserActionScrollPayload | UserActionMousePatternPayload | UserActionFormSubmitPayload | UserActionFocusChangePayload | UserActionPageVisibilityPayload | UserActionMouseHoverPayload | UserActionClipboardPayload;
 }
 
 interface UserActionClickPayload {
@@ -17,12 +17,18 @@ interface UserActionClickPayload {
   x: number;
   y: number;
   url: string;
+  features: GeneralizedEventFeatures;
 }
 
 interface UserActionKeydownPayload {
   key: string;
   code: string;
   url: string;
+  features: KeydownFeatures;
+}
+
+interface KeydownFeatures extends GeneralizedEventFeatures {
+  modifier_keys?: string[];
 }
 
 interface UserActionTextInputPayload {
@@ -36,76 +42,118 @@ interface UserActionTextInputPayload {
 
 interface UserActionScrollPayload {
   url: string;
-  features: {
-    scroll_direction: string;
-    scroll_position: number;
-    page_height: number;
-    viewport_height: number;
-    scroll_percentage: number;
-    domain: string;
-    page_type: string;
-  };
+  features: ScrollFeatures;
   timestamp: number;
+}
+
+interface ScrollFeatures extends GeneralizedEventFeatures {
+  scroll_direction: string;
+  scroll_position: number;
+  page_height: number;
+  viewport_height: number;
+  scroll_percentage: number;
+  // Enhanced scroll analysis
+  scroll_velocity?: number;
+  scroll_pause_duration?: number;
+  scroll_pattern?: 'scanning' | 'reading' | 'unknown';
 }
 
 interface UserActionMousePatternPayload {
   url: string;
-  features: {
-    pattern_type: string;
-    movement_speed: number;
-    direction_changes: number;
-    total_distance: number;
-    significance: number;
-    domain: string;
-    page_type: string;
-  };
+  features: MousePatternFeatures;
   trail: {x: number, y: number, timestamp: number}[];
   timestamp: number;
+}
+
+interface MousePatternFeatures extends GeneralizedEventFeatures {
+  pattern_type: string;
+  movement_speed: number;
+  direction_changes: number;
+  total_distance: number;
+  significance: number;
+  // Enhanced mouse trajectory analysis
+  dct_x_coefficients?: number[];
+  dct_y_coefficients?: number[];
+  original_length?: number;
+  duration?: number;
 }
 
 interface UserActionFormSubmitPayload {
   form_selector: string;
   url: string;
-  features: GeneralizedEventFeatures;
+  features: FormSubmitFeatures;
   field_count?: number;
   has_required_fields?: boolean;
   submit_method?: string;
+}
+
+interface FormSubmitFeatures extends GeneralizedEventFeatures {
+  // Enhanced form completion analysis
+  form_completion_pattern?: FormCompletionPattern;
 }
 
 interface UserActionFocusChangePayload {
   from_selector?: string;
   to_selector?: string;
   url: string;
-  features: GeneralizedEventFeatures;
+  features: FocusChangeFeatures;
   focus_type: 'gained' | 'lost' | 'switched';
+}
+
+interface FocusChangeFeatures extends GeneralizedEventFeatures {
+  // Enhanced focus tracking
+  focus_duration?: number;
+  focus_history?: FocusHistoryEntry[];
+  task_context?: TaskContext;
 }
 
 interface UserActionPageVisibilityPayload {
   url: string;
   visibility_state: 'visible' | 'hidden';
   previous_state?: string;
-  features: {
-    domain: string;
-    page_type: string;
-    time_on_page?: number;
-  };
+  features: VisibilityFeatures;
+}
+
+interface VisibilityFeatures extends GeneralizedEventFeatures {
+  time_on_page?: number;
+  // Enhanced interruption/resumption tracking
+  interruption_context?: InterruptionContext;
+  resumption_context?: ResumptionContext;
+  interruption_duration?: number;
+  pre_interruption_sequence?: EnrichedEvent[];
 }
 
 interface UserActionMouseHoverPayload {
   selector: string;
   url: string;
-  features: GeneralizedEventFeatures;
+  features: MouseHoverFeatures;
   hover_duration?: number;
   x: number;
   y: number;
 }
 
+interface MouseHoverFeatures extends GeneralizedEventFeatures {
+  // Enhanced hover analysis
+  hover_intent_confidence?: number;
+  element_visibility_ratio?: number;
+  is_deliberate_hover?: boolean;
+}
+
 interface UserActionClipboardPayload {
   operation: 'copy' | 'cut' | 'paste';
+  selector: string;
   url: string;
-  features: GeneralizedEventFeatures;
+  features: ClipboardFeatures;
   text_length?: number;
   has_formatting?: boolean;
+}
+
+interface ClipboardFeatures extends GeneralizedEventFeatures {
+  // Enhanced cross-page information flow tracking
+  source_context?: ClipboardSourceContext;
+  target_context?: ClipboardTargetContext;
+  cross_page_flow?: CrossPageFlowInfo;
+  clipboard_state_id?: string;
 }
 
 // The core structure for any browser-level event captured by the background script
@@ -118,22 +166,33 @@ interface TabCreatedPayload {
   tabId: number;
   windowId: number;
   url?: string;
+  features?: TabFeatures;
 }
 
 interface TabActivatedPayload {
   tabId: number;
   windowId: number;
+  features?: TabFeatures;
 }
 
 interface TabUpdatedPayload {
   tabId: number;
   url: string;
   title?: string;
+  features?: TabFeatures;
 }
 
 interface TabRemovedPayload {
   tabId: number;
   windowId: number;
+  features?: TabFeatures;
+}
+
+interface TabFeatures {
+  // Cross-tab task flow analysis
+  openerTabId?: number;
+  task_context?: 'reference' | 'comparison' | 'workflow' | 'unknown';
+  tab_relationship?: 'parent' | 'child' | 'sibling' | 'independent';
 }
 
 // The final, enriched event structure that is stored in the global sequence.
@@ -273,16 +332,10 @@ interface GeneralizedEventFeatures {
   has_fragment?: boolean;            // 是否包含片段标识符
 }
 
-// 扩展的点击事件载荷
-interface ExtendedUserActionClickPayload extends UserActionClickPayload {
-  features: GeneralizedEventFeatures;
-}
-
-// 扩展的按键事件载荷  
-interface ExtendedUserActionKeydownPayload extends UserActionKeydownPayload {
-  features: GeneralizedEventFeatures;
-  modifier_keys?: string[]; // 修饰键组合
-}
+// DEPRECATED: Extended payloads no longer needed - all base payloads now have features
+// Kept for backward compatibility but should not be used in new code
+interface ExtendedUserActionClickPayload extends UserActionClickPayload {}
+interface ExtendedUserActionKeydownPayload extends UserActionKeydownPayload {}
 
 // 技能/行为模式类型
 interface ActionSkill {
@@ -294,11 +347,76 @@ interface ActionSkill {
   confidence: number;        // 技能识别的置信度
 }
 
-// 高层次技能事件
+// High-level skill events
 interface SkillEvent extends BaseEvent {
   type: 'skill_action';
   payload: {
     skill: ActionSkill;
-    original_events: EnrichedEvent[]; // 构成该技能的原始事件
+    original_events: EnrichedEvent[]; // Original events that compose this skill
   };
+}
+
+// Focus change task context types
+interface FocusHistoryEntry {
+  element_role: string;
+  element_type: string;
+  focus_duration: number;
+  timestamp: number;
+  page_context: string;
+}
+
+interface TaskContext {
+  current_task_type: string; // 'iterative_search' | 'form_filling' | 'reading' | 'unknown'
+  task_confidence: number; // Confidence level in task identification
+  focus_pattern: string; // 'sequential' | 'alternating' | 'scattered'
+  interaction_intensity: 'low' | 'medium' | 'high';
+}
+
+// Page visibility interruption/resumption types
+interface InterruptionContext {
+  interruption_trigger: 'user_switch' | 'system_switch' | 'unknown';
+  last_interaction_type: string;
+  active_element_type?: string;
+  page_engagement_level: 'high' | 'medium' | 'low';
+  scroll_position?: number;
+}
+
+interface ResumptionContext {
+  resumption_trigger: 'user_return' | 'tab_focus' | 'unknown';
+  time_away: number; // Time away from page (ms)
+  context_similarity: number; // Similarity to pre-interruption context
+  likely_task_continuation: boolean; // Whether user likely continues previous task
+}
+
+// Clipboard cross-page information flow types
+interface ClipboardSourceContext {
+  source_page_type: string;
+  source_element_role: string;
+  content_category: 'code' | 'text' | 'url' | 'data' | 'unknown';
+  source_domain: string;
+  extraction_method: 'selection' | 'field_value' | 'element_text';
+}
+
+interface ClipboardTargetContext {
+  target_page_type: string;
+  target_element_role: string;
+  target_domain: string;
+  paste_context: 'form_field' | 'editor' | 'search_box' | 'unknown';
+  target_compatibility: 'high' | 'medium' | 'low'; // Compatibility with source content
+}
+
+interface CrossPageFlowInfo {
+  flow_type: 'same_domain' | 'cross_domain' | 'cross_site';
+  flow_pattern: 'code_to_editor' | 'search_to_form' | 'data_transfer' | 'unknown';
+  flow_confidence: number; // Confidence in information flow identification
+  semantic_relationship: 'related' | 'continuation' | 'independent';
+}
+
+// Form filling behavior analysis types
+interface FormCompletionPattern {
+  avg_time_per_field: number; // Average time spent per field (ms)
+  revisit_count: number; // Number of times fields were revisited
+  completion_efficiency: 'smooth' | 'hesitant' | 'struggling';
+  field_skip_count: number; // Number of fields skipped then returned to
+  error_correction_events: number; // Number of corrections made
 }
