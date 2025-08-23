@@ -2,13 +2,14 @@
  * Background Script - Main entry point with modular architecture
  */
 
-
+import { SynapseEvent } from './types';
 import { MessageRouter } from './core/message-router';
 import { StateManager } from './core/state-manager';
 import { DataStorage } from './core/data-storage';
 import { MLService } from './core/ml-service';
-// types imported only for compile-time assistance (not emitted)
-// We rely on the ambient declarations in types.ts via triple-slash in worker, so here we just use minimal typing.
+
+// Browser API compatibility using webextension-polyfill
+declare var browser: any; // webextension-polyfill provides this globally
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 // Note: types are declared globally in types.ts (no module exports), so we avoid importing them here.
 
@@ -66,8 +67,21 @@ async function initializeServices(): Promise<void> {
 }
 
 function setupMessageHandlers(): void {
-  // User action event handlers
+  // Register handlers for different event types
+  // New namespaced events from updated content.ts
   messageRouter.registerMessageHandlers({
+    // New SynapseEvent types (namespaced)
+    'ui.click': handleSynapseEvent,
+    'ui.keydown': handleSynapseEvent, 
+    'ui.text_input': handleSynapseEvent,
+    'user.scroll': handleSynapseEvent,
+    'form.submit': handleSynapseEvent,
+    'browser.tab.created': handleSynapseEvent,
+    'browser.tab.activated': handleSynapseEvent,
+    'browser.tab.updated': handleSynapseEvent,
+    'browser.tab.removed': handleSynapseEvent,
+    
+    // Legacy event types (for backward compatibility)
     'user_action_click': handleUserActionEvent,
     'user_action_keydown': handleUserActionEvent,
     'user_action_text_input': handleUserActionEvent,
@@ -137,13 +151,39 @@ function setupConnectionHandlers(): void {
 }
 
 // Event handlers
+async function handleSynapseEvent(message: any, sender: any): Promise<void> {
+  try {
+    if (stateManager.get('extensionPaused')) {
+      return;
+    }
+
+    // Check if message is already a SynapseEvent (from new content.ts)
+    if (message.timestamp && message.type && message.context && message.payload) {
+      console.log('[Background] Processing SynapseEvent:', message.type);
+      
+      // Store the clean event directly
+      await dataStorage.addToSequence('globalActionSequence', message);
+      
+      // Forward to ML service
+      mlService.processEvent(message);
+      
+      return;
+    }
+    
+    // Not a SynapseEvent - might be legacy format or control message
+    // Fall back to old handling logic
+  } catch (error) {
+    console.error('[Background] Error handling SynapseEvent:', error);
+  }
+}
+
 async function handleUserActionEvent(message: any, sender: any): Promise<void> {
   try {
     if (stateManager.get('extensionPaused')) {
       return;
     }
 
-    // Build EnrichedEvent with required context structure
+    // Build event with required context structure
     const tabId: number | null = sender.tab?.id ?? null;
     const windowId: number | null = sender.tab?.windowId ?? null;
     let tabInfo: chrome.tabs.Tab | undefined = sender.tab;
@@ -155,7 +195,7 @@ async function handleUserActionEvent(message: any, sender: any): Promise<void> {
       }
     }
 
-    const event: EnrichedEvent | any = {
+    const event: any = {
       type: message.type,
       payload: message.payload,
       timestamp: Date.now(),
@@ -236,7 +276,7 @@ async function handleBrowserActionEvent(message: any, sender: any): Promise<void
       }
     }
 
-    const event: EnrichedEvent | any = {
+    const event: any = {
       type: message.type,
       payload: message.payload,
       timestamp: Date.now(),

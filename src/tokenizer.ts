@@ -1,4 +1,17 @@
 /// <reference path="./types.ts" />
+import { SynapseEvent, ActionSkill } from './types';
+
+/**
+ * DEPRECATED: This tokenizer is replaced by the simplified ML worker.
+ * Kept for backward compatibility only.
+ */
+
+// Simple type aliases for legacy compatibility
+type EnrichedEvent = SynapseEvent;
+type TokenizedEvent = { tokenId: number; timestamp: number; originalEvent: SynapseEvent };
+type TokenSequence = TokenizedEvent[];
+type UserActionClickPayload = any;
+type UserActionKeydownPayload = any;
 
 // Simple DCT implementation
 function simpleDCT(input: number[]): number[] {

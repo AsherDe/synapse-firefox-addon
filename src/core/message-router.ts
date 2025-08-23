@@ -2,6 +2,9 @@
  * Message Router - Centralized message handling for the background script
  */
 
+// Browser API compatibility using webextension-polyfill
+declare var browser: any; // webextension-polyfill provides this globally
+
 interface MessageHandler {
   (message: any, sender?: any, sendResponse?: any): Promise<any> | any;
 }

@@ -1,6 +1,9 @@
 /**
- * ML Service - Machine Learning functionality management
+ * ML Service - Centralized machine learning operations
  */
+
+// Browser API compatibility using webextension-polyfill
+declare var browser: any; // webextension-polyfill provides this globally
 
 import { StateManager } from './state-manager';
 import { DataStorage } from './data-storage';

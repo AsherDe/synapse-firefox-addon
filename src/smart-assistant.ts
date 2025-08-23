@@ -6,6 +6,7 @@
  */
 
 /// <reference path="./types.ts" />
+import { SynapseEvent, ActionSkill } from './types';
 
 /**
  * Page context communication with content script via postMessage
@@ -92,7 +93,7 @@ interface UserFeedback {
   type: 'accept' | 'reject' | 'modify';
   rating?: number;     // 1-5 stars
   comment?: string;
-  actualActions?: EnrichedEvent[]; // User's actual actions performed
+  actualActions?: SynapseEvent[]; // User's actual actions performed
   confirmationRequired?: boolean;  // Whether to show confirmation dialog
   rollbackAvailable?: boolean;     // Whether rollback is possible
 }

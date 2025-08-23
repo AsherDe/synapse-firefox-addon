@@ -1,4 +1,5 @@
 /// <reference path="./types.ts" />
+import { SynapseEvent } from './types';
 
 // URL generalization function (inlined from url-generalization.ts)
 function generateGeneralizedURL(url: string): string {
@@ -66,6 +67,99 @@ const sendToBackground = (message: any) => {
     console.warn('[Synapse] Browser API not available');
   }
 };
+
+/**
+ * Create a standardized SynapseEvent from raw DOM event data.
+ * This is where all the dirty work of feature extraction happens.
+ * Everything else just deals with clean SynapseEvent structures.
+ */
+function createSynapseEvent(
+  type: string,
+  element?: HTMLElement | null,
+  rawEvent?: Event,
+  additionalFeatures: Record<string, any> = {}
+): SynapseEvent {
+  const now = Date.now();
+  const url = window.location.href;
+  const title = document.title || '';
+  
+  // Get tab context (best effort)
+  let tabId: number | null = null;
+  let windowId: number | null = null;
+  
+  // Try to get browser context if available
+  if (browser && browser.tabs) {
+    // This won't work in content script, but we try anyway
+    try {
+      browser.tabs.getCurrent((tab: any) => {
+        if (tab) {
+          tabId = tab.id;
+          windowId = tab.windowId;
+        }
+      });
+    } catch (e) {
+      // Expected to fail in content script context
+    }
+  }
+
+  // Extract all features if we have an element
+  const features: Record<string, any> = { ...additionalFeatures };
+  
+  let targetSelector: string | undefined;
+  let position: { x: number, y: number } | undefined;
+  let value: string | number | boolean | undefined;
+
+  if (element) {
+    targetSelector = getCssSelector(element);
+    
+    // Extract element-specific features - this is the dirty work
+    const elementFeatures = extractElementFeatures(element, url);
+    Object.assign(features, elementFeatures);
+  }
+
+  if (rawEvent) {
+    // Extract position for mouse events
+    if ('clientX' in rawEvent && 'clientY' in rawEvent) {
+      position = { 
+        x: (rawEvent as MouseEvent).clientX, 
+        y: (rawEvent as MouseEvent).clientY 
+      };
+    }
+
+    // Extract key info for keyboard events
+    if ('key' in rawEvent) {
+      value = (rawEvent as KeyboardEvent).key;
+      features.keyCode = (rawEvent as KeyboardEvent).keyCode;
+      features.modifierKeys = getModifierKeys(rawEvent as KeyboardEvent);
+    }
+
+    // Extract scroll info
+    if (type.includes('scroll')) {
+      features.scrollY = window.scrollY;
+      features.scrollX = window.scrollX;
+      features.documentHeight = document.documentElement.scrollHeight;
+      features.viewportHeight = window.innerHeight;
+      features.scrollPercentage = (window.scrollY / (document.documentElement.scrollHeight - window.innerHeight)) * 100;
+    }
+  }
+
+  return {
+    timestamp: now,
+    type,
+    context: {
+      tabId,
+      windowId, 
+      url: generateGeneralizedURL(url),
+      title
+    },
+    payload: {
+      targetSelector,
+      value,
+      position,
+      features
+    }
+  };
+}
 
 // URLGeneralizationEngine is now defined in url-generalization.ts
 
@@ -157,8 +251,8 @@ function getCssSelector(el: HTMLElement): string {
  * Implements Strategy 1: Feature-based rather than instance-based tokens
  * Now uses advanced URL generalization for enhanced privacy and accuracy
  */
-function extractElementFeatures(element: HTMLElement, url: string): GeneralizedEventFeatures {
-  const features: GeneralizedEventFeatures = {};
+function extractElementFeatures(element: HTMLElement, url: string): Record<string, any> {
+  const features: Record<string, any> = {};
   
   // Extract element role
   if (element.getAttribute('role')) {
@@ -446,24 +540,15 @@ class TextInputAggregator {
     
     // PRIVACY: Only record metadata, never actual text content
     const textLength = this.inputBuffer.trim().length;
-    const textInputPayload: UserActionTextInputPayload = {
-      text: '', // Never record actual text content for privacy
-      selector: getCssSelector(this.activeInput),
-      url: generateGeneralizedURL(window.location.href),
+    
+    // Use the new unified event structure
+    const synapseEvent = createSynapseEvent('ui.text_input', this.activeInput, undefined, {
+      text_length: textLength, // Only record length, not content
       input_method: this.detectInputMethod(),
-      features: {
-        ...features,
-        text_length: textLength // Only record length, not content
-      },
       duration: duration
-    };
-
-    const message: RawUserAction = {
-      type: 'user_action_text_input',
-      payload: textInputPayload,
-    };
-
-    sendToBackground(message);
+    });
+    
+    sendToBackground(synapseEvent);
     
     console.log('[Synapse] Text input finalized:', {
       textLength: this.inputBuffer.trim().length, // Only log length, not content
@@ -675,17 +760,19 @@ function setupScrollMonitoring(): void {
         
         // Send scroll event to background (less frequently than other events)
         eventThrottler.throttleEvent(event, () => {
-          const message = {
-            type: 'user_action_scroll',
-            payload: {
-              url: generateGeneralizedURL(window.location.href),
-              features: features,
-              timestamp: Date.now()
-            }
-          };
+          // Use the new unified event structure
+          const synapseEvent = createSynapseEvent('user.scroll', null, event, {
+            scroll_direction: newDirection,
+            scroll_position: currentScrollTop,
+            page_height: document.documentElement.scrollHeight,
+            viewport_height: window.innerHeight,
+            scroll_percentage: (currentScrollTop / (document.documentElement.scrollHeight - window.innerHeight)) * 100,
+            domain: window.location.hostname,
+            page_type: inferPageType(window.location.href)
+          });
           
-          console.log('[Synapse] Scroll event sent:', message);
-          sendToBackground(message);
+          console.log('[Synapse] Scroll event sent:', synapseEvent);
+          sendToBackground(synapseEvent);
         });
         
       } else {
@@ -993,22 +1080,9 @@ document.addEventListener('click', (event: MouseEvent) => {
   const element = event.target as HTMLElement;
   
   eventThrottler.throttleEvent(event, () => {
-    const features = extractElementFeatures(element, window.location.href);
-    
-    const clickPayload: ExtendedUserActionClickPayload = {
-      selector: getCssSelector(element),
-      x: event.clientX,
-      y: event.clientY,
-      url: generateGeneralizedURL(window.location.href),
-      features: features
-    };
-
-    const message: RawUserAction = {
-      type: 'user_action_click',
-      payload: clickPayload,
-    };
-
-    sendToBackground(message);
+    // Use the new unified event structure - all dirty work is done here
+    const synapseEvent = createSynapseEvent('ui.click', element, event);
+    sendToBackground(synapseEvent);
   });
 }, true); // Use capture phase to ensure all clicks are caught
 
@@ -1042,21 +1116,13 @@ document.addEventListener('keydown', (event: KeyboardEvent) => {
 
   // Use throttler for keyboard events to prevent spam
   eventThrottler.throttleEvent(event, () => {
-    const features = extractElementFeatures(target, window.location.href);
-    
-    const keydownPayload: UserActionKeydownPayload = {
-      key: event.key,
+    // Use the new unified event structure
+    const synapseEvent = createSynapseEvent('ui.keydown', target, event, {
       code: event.code,
-      url: generateGeneralizedURL(window.location.href),
-      features: { ...features, modifier_keys: modifierKeys }
-    };
-
-    const message: RawUserAction = {
-      type: 'user_action_keydown',
-      payload: keydownPayload,
-    };
-
-    sendToBackground(message);
+      modifier_keys: modifierKeys
+    });
+    
+    sendToBackground(synapseEvent);
   });
 }, true); // Use capture phase
 
@@ -1085,16 +1151,14 @@ function setupFormSubmitMonitoring(): void {
         submit_method: form.method || 'GET'
       };
       
-      // Enhance with unified enhancer  
-      const enhancement = eventEnhancer.enhanceEvent('user_action_form_submit', basePayload, form);
-      const formSubmitPayload: UserActionFormSubmitPayload = { ...basePayload, ...enhancement };
+      // Use the new unified event structure
+      const synapseEvent = createSynapseEvent('form.submit', form, event, {
+        field_count: inputs.length,
+        has_required_fields: requiredFields.length > 0,
+        submit_method: form.method || 'GET'
+      });
 
-      const message: RawUserAction = {
-        type: 'user_action_form_submit',
-        payload: formSubmitPayload,
-      };
-
-      sendToBackground(message);
+      sendToBackground(synapseEvent);
       console.log('[Synapse] Form submitted:', getCssSelector(form));
     });
   }, true);
@@ -1111,25 +1175,17 @@ function setupFormSubmitMonitoring(): void {
       const form = target.closest('form');
       if (form) {
         eventThrottler.throttleEvent(event, () => {
-            const features = extractElementFeatures(form, window.location.href);
             const inputs = form.querySelectorAll('input, textarea, select');
             const requiredFields = form.querySelectorAll('[required]');
             
-            const formSubmitPayload: UserActionFormSubmitPayload = {
-              form_selector: getCssSelector(form),
-              url: generateGeneralizedURL(window.location.href),
-              features: features,
+            // Use the new unified event structure
+            const synapseEvent = createSynapseEvent('form.submit', form, event, {
               field_count: inputs.length,
               has_required_fields: requiredFields.length > 0,
               submit_method: form.method || 'GET'
-            };
+            });
 
-            const message: RawUserAction = {
-              type: 'user_action_form_submit',
-              payload: formSubmitPayload,
-            };
-
-            sendToBackground(message);
+            sendToBackground(synapseEvent);
             console.log('[Synapse] Form submit button clicked:', getCssSelector(form));
           });
       }
@@ -1298,7 +1354,7 @@ const eventEnhancer = new EventEnhancer();
  * Maintains short-term focus history and infers task patterns
  */
 class FocusStateManager {
-  private focusHistory: FocusHistoryEntry[] = [];
+  private focusHistory: any[] = [];
   private currentFocusStart: number = 0;
   private currentElement: HTMLElement | null = null;
   private readonly MAX_HISTORY_SIZE = 5;
@@ -1313,13 +1369,13 @@ class FocusStateManager {
     this.currentFocusStart = Date.now();
   }
 
-  public finalizeFocus(): FocusHistoryEntry | null {
+  public finalizeFocus(): any | null {
     if (!this.currentElement || this.currentFocusStart === 0) {
       return null;
     }
 
     const duration = Date.now() - this.currentFocusStart;
-    const entry: FocusHistoryEntry = {
+    const entry = {
       element_role: this.inferElementRole(this.currentElement),
       element_type: this.currentElement.tagName.toLowerCase(),
       focus_duration: duration,
@@ -1340,11 +1396,11 @@ class FocusStateManager {
     return entry;
   }
 
-  public getFocusHistory(): FocusHistoryEntry[] {
+  public getFocusHistory(): any[] {
     return [...this.focusHistory];
   }
 
-  public getBasicTaskContext(): TaskContext {
+  public getBasicTaskContext(): any {
     // Simple, fast heuristics only - complex analysis goes to worker
     if (this.focusHistory.length < 2) {
       return {
@@ -1464,20 +1520,17 @@ function setupFocusChangeMonitoring(): void {
         focus_type: lastFocusedElement ? 'switched' : 'gained'
       };
       
-      // Enhance with unified enhancer
-      const enhancement = eventEnhancer.enhanceEvent('user_action_focus_change', basePayload, target);
-      const focusChangePayload: UserActionFocusChangePayload = { ...basePayload, ...enhancement };
+      // Use the new unified event structure
+      const synapseEvent = createSynapseEvent('ui.focus_change', target, event, {
+        focus_type: lastFocusedElement ? 'switched' : 'gained',
+        from_selector: lastFocusedElement ? getCssSelector(lastFocusedElement) : undefined
+      });
 
-      const message: RawUserAction = {
-        type: 'user_action_focus_change',
-        payload: focusChangePayload,
-      };
-
-      sendToBackground(message);
+      sendToBackground(synapseEvent);
       
       // Event recorded automatically by enhancer
       
-      console.log('[Synapse] Focus change event sent:', focusChangePayload.focus_type);
+      console.log('[Synapse] Focus change event sent:', synapseEvent.payload.features.focus_type);
       lastFocusedElement = target;
     });
   }, true);
@@ -1487,22 +1540,13 @@ function setupFocusChangeMonitoring(): void {
     const target = event.target as HTMLElement;
     
     eventThrottler.throttleEvent(event, () => {
-      const features = extractElementFeatures(target, window.location.href);
-      
-      const focusChangePayload: UserActionFocusChangePayload = {
-        from_selector: getCssSelector(target),
-        to_selector: undefined,
-        url: generateGeneralizedURL(window.location.href),
-        features: features,
-        focus_type: 'lost'
-      };
+      // Use the new unified event structure
+      const synapseEvent = createSynapseEvent('ui.focus_change', target, event, {
+        focus_type: 'lost',
+        from_selector: getCssSelector(target)
+      });
 
-      const message: RawUserAction = {
-        type: 'user_action_focus_change',
-        payload: focusChangePayload,
-      };
-
-      sendToBackground(message);
+      sendToBackground(synapseEvent);
       lastFocusedElement = null;
     });
   }, true);
@@ -1532,12 +1576,7 @@ class InterruptionManager {
     }
   }
 
-  public handleVisibilityChange(visibilityState: 'visible' | 'hidden'): {
-    interruption_context?: InterruptionContext;
-    resumption_context?: ResumptionContext;
-    interruption_duration?: number;
-    pre_interruption_sequence?: any[];
-  } {
+  public handleVisibilityChange(visibilityState: 'visible' | 'hidden'): any {
     const now = Date.now();
     
     if (visibilityState === 'hidden') {
@@ -1552,7 +1591,7 @@ class InterruptionManager {
         event_count: this.lastEventSequence.length
       };
 
-      const interruption_context: InterruptionContext = {
+      const interruption_context = {
         interruption_trigger: this.inferInterruptionTrigger(),
         last_interaction_type: this.preInterruptionContext.last_interaction,
         active_element_type: this.preInterruptionContext.active_element,
@@ -1568,7 +1607,7 @@ class InterruptionManager {
       // Page becoming visible - record resumption context
       const interruption_duration = this.interruptionStartTime > 0 ? now - this.interruptionStartTime : 0;
       
-      const resumption_context: ResumptionContext = {
+      const resumption_context = {
         resumption_trigger: 'user_return', // Simplified
         time_away: interruption_duration,
         context_similarity: this.calculateContextSimilarity(),
@@ -1659,14 +1698,16 @@ function setupPageVisibilityMonitoring(): void {
     
     // Enhance with unified enhancer
     const enhancement = eventEnhancer.enhanceEvent('user_action_page_visibility', basePayload);
-    const visibilityPayload: UserActionPageVisibilityPayload = { ...basePayload, ...enhancement };
+    
+    // Use the new unified event structure
+    const synapseEvent = createSynapseEvent('browser.page_visibility', null, undefined, {
+      visibility_state: currentState,
+      previous_state: lastVisibilityState,
+      time_on_page: timeOnPage,
+      ...enhancement
+    });
 
-    const message: RawUserAction = {
-      type: 'user_action_page_visibility',
-      payload: visibilityPayload,
-    };
-
-    sendToBackground(message);
+    sendToBackground(synapseEvent);
     
     console.log('[Synapse] Page visibility changed:', currentState, 'with enhanced context');
     
@@ -1738,23 +1779,12 @@ function setupMouseHoverMonitoring(): void {
         if (now - lastHoverSentAt > HOVER_COOLDOWN) {
           lastHoverSentAt = now;
           
-          const features = extractElementFeatures(target, window.location.href);
+          // Use the new unified event structure
+          const synapseEvent = createSynapseEvent('ui.mouse_hover', target, event, {
+            hover_duration: hoverDuration
+          });
 
-          const hoverPayload: UserActionMouseHoverPayload = {
-            selector: getCssSelector(target),
-            url: generateGeneralizedURL(window.location.href),
-            features: features,
-            hover_duration: hoverDuration,
-            x: event.clientX,
-            y: event.clientY
-          };
-
-          const message: RawUserAction = {
-            type: 'user_action_mouse_hover',
-            payload: hoverPayload,
-          };
-
-          sendToBackground(message);
+          sendToBackground(synapseEvent);
           console.log('[Synapse] Significant hover reported:', getCssSelector(target), 'duration:', hoverDuration);
         } else {
           console.log('[Synapse] Hover event cooled down, not reported');
@@ -1774,10 +1804,7 @@ class ClipboardStateManager {
   private pendingCopyState: any = null;
   private readonly COPY_PASTE_TIMEOUT = 30000; // 30 seconds to link copy-paste
 
-  public handleCopyOperation(element: HTMLElement, features: any): {
-    source_context: ClipboardSourceContext;
-    clipboard_state_id: string;
-  } {
+  public handleCopyOperation(element: HTMLElement, features: any): any {
     const stateId = this.generateStateId();
     const sourceContext = this.extractSourceContext(element, features);
     
@@ -1802,11 +1829,7 @@ class ClipboardStateManager {
     };
   }
 
-  public handlePasteOperation(element: HTMLElement, features: any): {
-    target_context: ClipboardTargetContext;
-    cross_page_flow?: CrossPageFlowInfo;
-    clipboard_state_id?: string;
-  } {
+  public handlePasteOperation(element: HTMLElement, features: any): any {
     const targetContext = this.extractTargetContext(element, features);
     
     if (this.pendingCopyState && this.isWithinTimeout()) {
@@ -1829,7 +1852,7 @@ class ClipboardStateManager {
     };
   }
 
-  private extractSourceContext(element: HTMLElement, features: any): ClipboardSourceContext {
+  private extractSourceContext(element: HTMLElement, features: any): any {
     return {
       source_page_type: features.page_type || 'general',
       source_element_role: features.element_role || 'unknown',
@@ -1839,7 +1862,7 @@ class ClipboardStateManager {
     };
   }
 
-  private extractTargetContext(element: HTMLElement, features: any): ClipboardTargetContext {
+  private extractTargetContext(element: HTMLElement, features: any): any {
     return {
       target_page_type: features.page_type || 'general', 
       target_element_role: features.element_role || 'unknown',
@@ -1849,7 +1872,7 @@ class ClipboardStateManager {
     };
   }
 
-  private analyzeCrossPageFlow(sourceContext: ClipboardSourceContext, targetContext: ClipboardTargetContext): CrossPageFlowInfo {
+  private analyzeCrossPageFlow(sourceContext: any, targetContext: any): any {
     const isSameDomain = sourceContext.source_domain === targetContext.target_domain;
     const isCrossSite = sourceContext.source_domain.split('.').slice(-2).join('.') !== 
                        targetContext.target_domain.split('.').slice(-2).join('.');
@@ -1908,7 +1931,7 @@ class ClipboardStateManager {
     return 'unknown';
   }
 
-  private inferFlowPattern(source: ClipboardSourceContext, target: ClipboardTargetContext): 
+  private inferFlowPattern(source: any, target: any): 
     'code_to_editor' | 'search_to_form' | 'data_transfer' | 'unknown' {
     
     if (source.content_category === 'code' && target.paste_context === 'editor') {
@@ -1923,7 +1946,7 @@ class ClipboardStateManager {
     return 'unknown';
   }
 
-  private calculateFlowConfidence(source: ClipboardSourceContext, target: ClipboardTargetContext): number {
+  private calculateFlowConfidence(source: any, target: any): number {
     let confidence = 0.5; // Base confidence
     
     // Boost confidence for logical patterns
@@ -1934,7 +1957,7 @@ class ClipboardStateManager {
     return Math.min(confidence, 1.0);
   }
 
-  private inferSemanticRelationship(source: ClipboardSourceContext, target: ClipboardTargetContext): 
+  private inferSemanticRelationship(source: any, target: any): 
     'related' | 'continuation' | 'independent' {
     
     if (source.source_domain === target.target_domain) return 'continuation';
@@ -1978,14 +2001,16 @@ function setupClipboardMonitoring(): void {
       
       // Enhance with unified enhancer
       const enhancement = eventEnhancer.enhanceEvent('user_action_clipboard', basePayload, target);
-      const clipboardPayload: UserActionClipboardPayload = { ...basePayload, ...enhancement };
+      
+      // Use the new unified event structure
+      const synapseEvent = createSynapseEvent('ui.clipboard', target, event, {
+        operation: 'copy',
+        text_length: selection ? selection.toString().length : 0,
+        has_formatting: hasFormatting || false,
+        ...enhancement
+      });
 
-      const message: RawUserAction = {
-        type: 'user_action_clipboard',
-        payload: clipboardPayload,
-      };
-
-      sendToBackground(message);
+      sendToBackground(synapseEvent);
       
       console.log('[Synapse] Copy operation detected with enhanced context');
     });
@@ -1999,21 +2024,14 @@ function setupClipboardMonitoring(): void {
       const features = extractElementFeatures(target, window.location.href);
       const selection = window.getSelection();
       
-      const clipboardPayload: UserActionClipboardPayload = {
+      // Use the new unified event structure
+      const synapseEvent = createSynapseEvent('ui.clipboard', target, event, {
         operation: 'cut',
-        selector: getCssSelector(target),
-        url: generateGeneralizedURL(window.location.href),
-        features: features,
         text_length: selection ? selection.toString().length : 0,
         has_formatting: false
-      };
+      });
 
-      const message: RawUserAction = {
-        type: 'user_action_clipboard',
-        payload: clipboardPayload,
-      };
-
-      sendToBackground(message);
+      sendToBackground(synapseEvent);
       console.log('[Synapse] Cut operation detected');
     });
   }, true);
@@ -2038,14 +2056,16 @@ function setupClipboardMonitoring(): void {
       
       // Enhance with unified enhancer
       const enhancement = eventEnhancer.enhanceEvent('user_action_clipboard', basePayload, target);
-      const clipboardPayload: UserActionClipboardPayload = { ...basePayload, ...enhancement };
+      
+      // Use the new unified event structure
+      const synapseEvent = createSynapseEvent('ui.clipboard', target, event, {
+        operation: 'paste',
+        text_length: pastedText.length,
+        has_formatting: hasFormatting,
+        ...enhancement
+      });
 
-      const message: RawUserAction = {
-        type: 'user_action_clipboard',
-        payload: clipboardPayload,
-      };
-
-      sendToBackground(message);
+      sendToBackground(synapseEvent);
       
       console.log('[Synapse] Paste operation detected with enhanced context');
     });

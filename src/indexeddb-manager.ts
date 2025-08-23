@@ -1,4 +1,5 @@
 /// <reference path="./types.ts" />
+import { SynapseEvent } from './types';
 
 /**
  * IndexedDB Manager for Synapse Event Sequence Storage
@@ -12,12 +13,9 @@ interface SynapseDB extends IDBDatabase {
 }
 
 interface EventRecord {
-  id?: number;
+  id: string;
+  event: SynapseEvent;
   timestamp: number;
-  event: EnrichedEvent;
-  type: string;
-  url: string;
-  domain: string;
 }
 
 class IndexedDBManager {
@@ -76,7 +74,7 @@ class IndexedDBManager {
    * Add a single event to the database
    * O(1) complexity for individual inserts
    */
-  async addEvent(event: EnrichedEvent): Promise<void> {
+  async addEvent(event: SynapseEvent): Promise<void> {
     await this.ensureInitialized();
     
     const transaction = this.db!.transaction([this.storeName], 'readwrite');
@@ -95,11 +93,9 @@ class IndexedDBManager {
     domain = this.extractDomain(url);
     
     const eventRecord: EventRecord = {
-      timestamp: event.timestamp,
+      id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
       event: event,
-      type: event.type,
-      url: url,
-      domain: domain
+      timestamp: event.timestamp
     };
 
     return new Promise((resolve, reject) => {
@@ -121,7 +117,7 @@ class IndexedDBManager {
   /**
    * Add multiple events in a single transaction (batch operation)
    */
-  async addEvents(events: EnrichedEvent[]): Promise<void> {
+  async addEvents(events: SynapseEvent[]): Promise<void> {
     await this.ensureInitialized();
     
     const transaction = this.db!.transaction([this.storeName], 'readwrite');
@@ -145,11 +141,9 @@ class IndexedDBManager {
         domain = this.extractDomain(url);
         
         const eventRecord: EventRecord = {
-          timestamp: event.timestamp,
+          id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
           event: event,
-          type: event.type,
-          url: url,
-          domain: domain
+          timestamp: event.timestamp
         };
 
         const request = store.add(eventRecord);
@@ -176,7 +170,7 @@ class IndexedDBManager {
    * Get recent events for training/prediction
    * Efficient query using timestamp index
    */
-  async getRecentEvents(limit: number = 1000): Promise<EnrichedEvent[]> {
+  async getRecentEvents(limit: number = 1000): Promise<SynapseEvent[]> {
     await this.ensureInitialized();
     
     const transaction = this.db!.transaction([this.storeName], 'readonly');
@@ -184,7 +178,7 @@ class IndexedDBManager {
     const index = store.index('timestamp');
     
     return new Promise((resolve, reject) => {
-      const events: EnrichedEvent[] = [];
+      const events: SynapseEvent[] = [];
       const request = index.openCursor(null, 'prev'); // Descending order by timestamp
       
       request.onsuccess = () => {
@@ -209,7 +203,7 @@ class IndexedDBManager {
   /**
    * Get events within a time range
    */
-  async getEventsByTimeRange(startTime: number, endTime: number): Promise<EnrichedEvent[]> {
+  async getEventsByTimeRange(startTime: number, endTime: number): Promise<SynapseEvent[]> {
     await this.ensureInitialized();
     
     const transaction = this.db!.transaction([this.storeName], 'readonly');
@@ -218,7 +212,7 @@ class IndexedDBManager {
     const range = IDBKeyRange.bound(startTime, endTime);
     
     return new Promise((resolve, reject) => {
-      const events: EnrichedEvent[] = [];
+      const events: SynapseEvent[] = [];
       const request = index.openCursor(range);
       
       request.onsuccess = () => {
@@ -297,12 +291,11 @@ class IndexedDBManager {
           newestTimestamp = Math.max(newestTimestamp, record.timestamp);
           
           // Count event types
-          eventTypes[record.type] = (eventTypes[record.type] || 0) + 1;
+          eventTypes[record.event.type] = (eventTypes[record.event.type] || 0) + 1;
           
-          // Count domains
-          if (record.domain) {
-            topDomains[record.domain] = (topDomains[record.domain] || 0) + 1;
-          }
+          // Count domains from event context
+          const domain = record.event.context?.url ? this.extractDomain(record.event.context.url) : 'unknown';
+          topDomains[domain] = (topDomains[domain] || 0) + 1;
           
           cursor.continue();
         } else {

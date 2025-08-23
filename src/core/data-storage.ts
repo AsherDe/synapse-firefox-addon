@@ -4,6 +4,9 @@
 
 import { StateManager } from './state-manager';
 
+// Browser API compatibility using webextension-polyfill
+declare var browser: any; // webextension-polyfill provides this globally
+
 interface StorageConfig {
   batchWriteDelay: number;
   batchWriteMaxSize: number;

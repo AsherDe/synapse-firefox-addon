@@ -1,11 +1,11 @@
-/// <reference path="./types.ts" />
+import { SynapseEvent } from './types';
 // Licensed under the Apache License, Version 2.0
 
 // Browser API compatibility using webextension-polyfill
 declare var browser: any; // webextension-polyfill provides this globally
 
 class PopupController {
-  private sequence: GlobalActionSequence = [];
+  private sequence: SynapseEvent[] = [];
   private updateInterval: number | null = null;
   private backgroundPort: any | null = null;
 
@@ -345,50 +345,52 @@ class PopupController {
     }
   }
 
-  private createEventItemHtml(event: EnrichedEvent): string {
+  private createEventItemHtml(event: SynapseEvent): string {
     let details = '';
-    switch(event.type) {
-      case 'user_action_click':
-        details = `Clicked <code>${event.payload.selector}</code>`;
+    const eventType = event.type; // New unified structure uses just event.type
+
+    switch(eventType) {
+      case 'ui.click':
+        details = `Clicked <code>${event.payload.targetSelector || 'unknown'}</code>`;
         break;
-      case 'user_action_keydown':
-        details = `Pressed <code>${event.payload.key}</code>`;
+      case 'ui.keydown':
+        details = `Pressed <code>${event.payload.value || 'unknown'}</code>`;
         break;
-      case 'user_action_text_input':
-        details = `Text input in <code>${event.payload.selector}</code> (${event.payload.text.length} chars)`;
+      case 'ui.text_input':
+        details = `Text input in <code>${event.payload.targetSelector || 'unknown'}</code> (${event.payload.features?.text_length || 0} chars)`;
         break;
-      case 'user_action_scroll':
-        details = `Scrolled ${event.payload.features.scroll_direction} to ${event.payload.features.scroll_percentage.toFixed(1)}%`;
+      case 'user.scroll':
+        details = `Scrolled ${event.payload.features?.scroll_direction || 'unknown'} to ${(event.payload.features?.scroll_percentage || 0).toFixed(1)}%`;
         break;
-      case 'user_action_mouse_pattern':
-        details = `Mouse ${event.payload.features.pattern_type} pattern (${event.payload.trail.length} points)`;
+      case 'ui.mouse_pattern':
+        details = `Mouse ${event.payload.features?.pattern_type || 'unknown'} pattern`;
         break;
-      case 'user_action_form_submit':
-        details = `Submitted form <code>${event.payload.form_selector}</code>`;
+      case 'form.submit':
+        details = `Submitted form <code>${event.payload.targetSelector || 'unknown'}</code>`;
         break;
-      case 'user_action_focus_change':
-        details = `Focus ${event.payload.focus_type}: <code>${event.payload.to_selector || 'unknown'}</code>`;
+      case 'ui.focus_change':
+        details = `Focus ${event.payload.features?.focus_type || 'unknown'}: <code>${event.payload.features?.to_selector || 'unknown'}</code>`;
         break;
-      case 'user_action_page_visibility':
-        details = `Page visibility: ${event.payload.visibility_state}`;
+      case 'browser.page_visibility':
+        details = `Page visibility: ${event.payload.features?.visibility_state || 'unknown'}`;
         break;
-      case 'user_action_mouse_hover':
-        details = `Hovered over <code>${event.payload.selector}</code> for ${event.payload.hover_duration}ms`;
+      case 'ui.mouse_hover':
+        details = `Hovered over <code>${event.payload.targetSelector || 'unknown'}</code> for ${event.payload.features?.hover_duration || 0}ms`;
         break;
-      case 'user_action_clipboard':
-        details = `Clipboard ${event.payload.operation} (${event.payload.text_length} chars)`;
+      case 'ui.clipboard':
+        details = `Clipboard ${event.payload.features?.operation || 'unknown'} (${event.payload.features?.text_length || 0} chars)`;
         break;
-      case 'browser_action_tab_activated':
-        details = `Switched to tab <code>${event.payload.tabId}</code>`;
+      case 'browser.tab.activated':
+        details = `Switched to tab <code>${event.context.tabId || 'unknown'}</code>`;
         break;
-      case 'browser_action_tab_created':
-        details = `Created tab <code>${event.payload.tabId}</code>`;
+      case 'browser.tab.created':
+        details = `Created tab <code>${event.context.tabId || 'unknown'}</code>`;
         break;
-      case 'browser_action_tab_updated':
-        details = `Tab <code>${event.payload.tabId}</code> navigated to new URL`;
+      case 'browser.tab.updated':
+        details = `Tab <code>${event.context.tabId || 'unknown'}</code> navigated to new URL`;
         break;
-      case 'browser_action_tab_removed':
-        details = `Closed tab <code>${event.payload.tabId}</code>`;
+      case 'browser.tab.removed':
+        details = `Closed tab <code>${event.context.tabId || 'unknown'}</code>`;
         break;
       default:
         details = 'Unknown event';
@@ -397,7 +399,7 @@ class PopupController {
     return `
       <div class="event-item">
         <div class="event-info">
-          <div class="event-type">${event.type.replace(/_/g, ' ')}</div>
+          <div class="event-type">${event.type.replace(/[._]/g, ' ')}</div>
           <div class="event-details">${details}</div>
         </div>
         <div class="event-time">${this.formatTime(event.timestamp)}</div>
