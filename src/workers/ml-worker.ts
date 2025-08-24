@@ -22,8 +22,9 @@ function simpleKMeans(data: number[][], k: number): number[][] {
     centroids.push(centroid);
   }
   
-  // Simple iteration (just a few rounds)
-  for (let iter = 0; iter < 5; iter++) {
+  // Iteration with convergence check
+  let prevCentroids: number[][] = centroids.map(c => [...c]);
+  for (let iter = 0; iter < maxIterations; iter++) {
     const clusters: number[][][] = Array(k).fill(null).map(() => []);
     
     // Assign points to clusters
