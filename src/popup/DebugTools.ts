@@ -42,11 +42,12 @@ export class DebugTools {
     const tabContent = document.getElementById(`dev-${tabName}`);
     if (!tabContent) return;
     
-    if (tabContent.querySelector('.refresh-btn')) return;
+    if (tabContent.querySelector('.btn')) return;
     
     const refreshBtn = document.createElement('button');
-    refreshBtn.className = 'refresh-btn';
+    refreshBtn.className = 'btn btn-secondary';
     refreshBtn.textContent = '🔄 Refresh Data';
+    refreshBtn.style.marginBottom = '16px';
     
     refreshBtn.addEventListener('click', () => {
       this.loadDevTabData(tabName);
