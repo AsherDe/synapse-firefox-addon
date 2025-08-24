@@ -251,18 +251,42 @@ export class DebugTools {
   }
 
   private getBrowserName(): string {
+    // Use WebExtension API for reliable browser detection
+    if (typeof browser !== 'undefined' && browser.runtime && browser.runtime.getBrowserInfo) {
+      // Firefox supports getBrowserInfo
+      browser.runtime.getBrowserInfo().then((info: { name: string }) => info.name).catch(() => 'Unknown');
+    }
+    
+    // Fallback to user agent detection for other browsers
     const ua = navigator.userAgent;
     if (ua.includes('Firefox')) return 'Firefox';
+    if (ua.includes('Edg/')) return 'Edge';  // Modern Edge uses 'Edg/'
     if (ua.includes('Chrome')) return 'Chrome';
-    if (ua.includes('Safari')) return 'Safari';
-    if (ua.includes('Edge')) return 'Edge';
+    if (ua.includes('Safari') && !ua.includes('Chrome')) return 'Safari';
     return 'Unknown';
   }
 
   private getBrowserVersion(): string {
+    // Use WebExtension API when available
+    if (typeof browser !== 'undefined' && browser.runtime && browser.runtime.getBrowserInfo) {
+      browser.runtime.getBrowserInfo().then((info: { version: string }) => info.version).catch(() => 'Unknown');
+    }
+    
+    // Fallback: more robust regex for version extraction
     const ua = navigator.userAgent;
-    const match = ua.match(/(Firefox|Chrome|Safari|Edge)\/([0-9.]+)/);
-    return match ? match[2] : 'Unknown';
+    const patterns = [
+      /Firefox\/([0-9.]+)/,
+      /Edg\/([0-9.]+)/,      // Modern Edge
+      /Chrome\/([0-9.]+)/,
+      /Version\/([0-9.]+).*Safari/  // Safari version pattern
+    ];
+    
+    for (const pattern of patterns) {
+      const match = ua.match(pattern);
+      if (match) return match[1];
+    }
+    
+    return 'Unknown';
   }
 
   private formatJsonWithSyntaxHighlight(obj: any): string {

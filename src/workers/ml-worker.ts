@@ -6,6 +6,11 @@
 import * as tf from '@tensorflow/tfjs';
 import { SynapseEvent } from '../shared/types';
 
+// Constants for K-means clustering
+const MAX_ITERATIONS = 100;
+const MIN_FEATURES_FOR_KMEANS = 8;
+const MAX_FEATURES_FOR_KMEANS = 16;
+
 // Simple K-means implementation
 function simpleKMeans(data: number[][], k: number): number[][] {
   if (data.length === 0) return [];
@@ -24,7 +29,7 @@ function simpleKMeans(data: number[][], k: number): number[][] {
   
   // Iteration with convergence check
   let prevCentroids: number[][] = centroids.map(c => [...c]);
-  for (let iter = 0; iter < maxIterations; iter++) {
+  for (let iter = 0; iter < MAX_ITERATIONS; iter++) {
     const clusters: number[][][] = Array(k).fill(null).map(() => []);
     
     // Assign points to clusters
@@ -246,8 +251,8 @@ class SynapseMLWorker {
     const features = sequence.map(event => this.eventToFeatureVector(event));
     
     // Update codebook with K-means (simplified)
-    if (features.length >= 8) {
-      this.codebook = simpleKMeans(features, Math.min(features.length, 16));
+    if (features.length >= MIN_FEATURES_FOR_KMEANS) {
+      this.codebook = simpleKMeans(features, Math.min(features.length, MAX_FEATURES_FOR_KMEANS));
     }
     
     return {
