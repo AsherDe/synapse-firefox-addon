@@ -1,9 +1,12 @@
 /**
- * ML Service - Machine Learning functionality management
+ * ML Service - Centralized machine learning operations
  */
 
-import { StateManager } from './state-manager';
-import { DataStorage } from './data-storage';
+// Browser API compatibility using webextension-polyfill
+declare var browser: any; // webextension-polyfill provides this globally
+
+import { StateManager } from './StateManager';
+import { DataStorage } from './DataStorage';
 
 interface MLWorkerMessage {
   type: string;
@@ -84,6 +87,10 @@ export class MLService {
   }
 
   private handleWorkerMessage(message: MLWorkerResponse): void {
+    if (!message || !message.type) {
+      console.warn('[MLService] Received an invalid or untyped message from worker:', message);
+      return;
+    }
     console.log('[MLService] Received from worker:', message.type);
 
     // Handle responses to specific requests
@@ -343,8 +350,8 @@ export class MLService {
     try {
   event = await this.normalizeEvent(event);
       return await this.sendToWorker({
-        type: 'processEvent',
-        data: { event }
+        type: 'processEvents',
+        data: [event]  // ml-worker expects array of events
       });
     } catch (error) {
       console.error('[MLService] Failed to process event:', error);

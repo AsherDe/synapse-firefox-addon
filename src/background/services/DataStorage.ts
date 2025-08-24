@@ -2,7 +2,10 @@
  * Data Storage - Centralized data persistence layer
  */
 
-import { StateManager } from './state-manager';
+import { StateManager } from './StateManager';
+
+// Browser API compatibility using webextension-polyfill
+declare var browser: any; // webextension-polyfill provides this globally
 
 interface StorageConfig {
   batchWriteDelay: number;

@@ -4,11 +4,11 @@ const CopyWebpackPlugin = require('copy-webpack-plugin');
 module.exports = {
   mode: 'production',
   entry: {
-    background: './src/background.ts',
-    content: './src/content.ts',
-    popup: './src/popup.ts',
-    'ml-worker': './src/ml-worker.ts',
-    'smart-assistant': './src/smart-assistant.ts'
+    background: './src/background/index.ts',
+    content: './src/content/index.ts',
+    popup: './src/popup/index.ts',
+    'ml-worker': './src/workers/ml-worker.ts',
+    'smart-assistant': './src/smart-assistant/index.ts'
   },
   output: {
     path: path.resolve(__dirname, 'dist'),

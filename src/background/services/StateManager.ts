@@ -1,10 +1,15 @@
 /**
- * State Manager - Centralized state management for the background script
+ * State Manager - Centralized state management for the extension
  */
 
-interface StateChangeListener {
-  (key: string, newValue: any, oldValue: any): void;
+// Browser API compatibility using webextension-polyfill
+declare var browser: any; // webextension-polyfill provides this globally
+
+interface ExtensionState {
+  [key: string]: any;
 }
+
+type StateChangeListener = (newValue: any, oldValue: any) => void;
 
 export class StateManager {
   private state: Map<string, any> = new Map();
@@ -176,7 +181,7 @@ export class StateManager {
     if (keyListeners) {
       keyListeners.forEach(listener => {
         try {
-          listener(key, newValue, oldValue);
+          listener(newValue, oldValue);
         } catch (error) {
           console.error(`[StateManager] Error in listener for ${key}:`, error);
         }

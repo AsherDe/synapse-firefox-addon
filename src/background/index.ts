@@ -2,13 +2,14 @@
  * Background Script - Main entry point with modular architecture
  */
 
+import { SynapseEvent } from '../shared/types';
+import { MessageRouter } from './services/MessageRouter';
+import { StateManager } from './services/StateManager';
+import { DataStorage } from './services/DataStorage';
+import { MLService } from './services/MLService';
 
-import { MessageRouter } from './core/message-router';
-import { StateManager } from './core/state-manager';
-import { DataStorage } from './core/data-storage';
-import { MLService } from './core/ml-service';
-// types imported only for compile-time assistance (not emitted)
-// We rely on the ambient declarations in types.ts via triple-slash in worker, so here we just use minimal typing.
+// Browser API compatibility using webextension-polyfill
+declare var browser: any; // webextension-polyfill provides this globally
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 // Note: types are declared globally in types.ts (no module exports), so we avoid importing them here.
 
@@ -66,23 +67,24 @@ async function initializeServices(): Promise<void> {
 }
 
 function setupMessageHandlers(): void {
-  // User action event handlers
+  // Register handlers for different event types
+  // New namespaced events from updated content.ts
   messageRouter.registerMessageHandlers({
-    'user_action_click': handleUserActionEvent,
-    'user_action_keydown': handleUserActionEvent,
-    'user_action_text_input': handleUserActionEvent,
-    'user_action_scroll': handleUserActionEvent,
-    'user_action_mouse_pattern': handleUserActionEvent,
-    'user_action_form_submit': handleUserActionEvent,
-    'user_action_focus_change': handleUserActionEvent,
-    'user_action_page_visibility': handleUserActionEvent,
-    'user_action_mouse_hover': handleUserActionEvent,
-    'user_action_clipboard': handleUserActionEvent,
-    'userAction': handleUserActionEvent,
-    'browser_action_tab_activated': handleBrowserActionEvent,
-    'browser_action_tab_created': handleBrowserActionEvent,
-    'browser_action_tab_removed': handleBrowserActionEvent,
-    'browser_action_tab_updated': handleBrowserActionEvent,
+    // New SynapseEvent types (namespaced)
+    'ui.click': handleSynapseEvent,
+    'ui.keydown': handleSynapseEvent, 
+    'ui.text_input': handleSynapseEvent,
+    'ui.focus_change': handleSynapseEvent,
+    'ui.mouse_hover': handleSynapseEvent,
+    'ui.mouse_pattern': handleSynapseEvent,
+    'ui.clipboard': handleSynapseEvent,
+    'user.scroll': handleSynapseEvent,
+    'form.submit': handleSynapseEvent,
+    'browser.tab.created': handleSynapseEvent,
+    'browser.tab.activated': handleSynapseEvent,
+    'browser.tab.updated': handleSynapseEvent,
+    'browser.tab.removed': handleSynapseEvent,
+    'browser.page_visibility': handleSynapseEvent,
     
     // Control messages
     'pause': handlePauseMessage,
@@ -114,6 +116,13 @@ function setupMessageHandlers(): void {
     'getCodebookInfo': handleGetCodebookInfoMessage,
   'getVocabulary': handleGetVocabularyMessage,
   'getState': handleGetStateMessage,
+    
+    // Floating control center messages
+    'FLOATING_CONTROL_TOGGLE_MONITORING': handleFloatingControlToggleMonitoring,
+    'FLOATING_CONTROL_EXPORT_DATA': handleFloatingControlExportData,
+    'FLOATING_CONTROL_TOGGLE_SMART_ASSISTANT': handleFloatingControlToggleSmartAssistant,
+    'FLOATING_CONTROL_OPEN_DEBUG_TOOLS': handleFloatingControlOpenDebugTools,
+    'FLOATING_CONTROL_OPEN_SETTINGS': handleFloatingControlOpenSettings,
   });
 }
 
@@ -124,8 +133,8 @@ function setupConnectionHandlers(): void {
       await handlePopupMessage(port, message);
     });
     
-    // Send initial data to popup
-    sendInitialDataToPopup(port);
+    // Send initial data immediately when popup connects
+    broadcastCompleteDataSnapshot(port);
   });
   
   // Smart assistant connection handler
@@ -136,128 +145,141 @@ function setupConnectionHandlers(): void {
   });
 }
 
-// Event handlers
-async function handleUserActionEvent(message: any, sender: any): Promise<void> {
+// Broadcast complete data snapshot to popup
+async function broadcastCompleteDataSnapshot(port?: any): Promise<void> {
   try {
-    if (stateManager.get('extensionPaused')) {
-      return;
-    }
-
-    // Build EnrichedEvent with required context structure
-    const tabId: number | null = sender.tab?.id ?? null;
-    const windowId: number | null = sender.tab?.windowId ?? null;
-    let tabInfo: chrome.tabs.Tab | undefined = sender.tab;
-    if (!tabInfo && tabId !== null) {
-      try {
-        tabInfo = await browser.tabs.get(tabId);
-      } catch {
-        // ignore
-      }
-    }
-
-    const event: EnrichedEvent | any = {
-      type: message.type,
-      payload: message.payload,
-      timestamp: Date.now(),
-      context: {
-        tabId,
-        windowId,
-        tabInfo
-      }
-    };
-
-    // Add to sequence
-    await dataStorage.addToSequence('globalActionSequence', event);
-    
-    // Process with ML service
-    try {
-      await mlService.processEvent(event);
-    } catch (error) {
-      console.error('[Background] ML processing failed:', error);
-    }
-    
-    // Broadcast to connected clients
-    messageRouter.broadcast('popup', {
-      type: 'eventAdded',
-      data: event
-    });
-
-    // 获取最新预测并广播（打通事件->预测->UI 链路）
-    try {
-      const prediction = await mlService.getPrediction();
-      messageRouter.broadcast('popup', {
-        type: 'predictionUpdate',
-        data: prediction
-      });
-    } catch (predErr) {
-      console.warn('[Background] Prediction attempt failed (will continue):', predErr);
-    }
-    
-    // Check if training is needed
     const sequence = await dataStorage.getSequence('globalActionSequence');
-    if (sequence.length % 50 === 0 && sequence.length >= 20) {
+    const pauseState = stateManager.get('extensionPaused') || false;
+    const guidanceEnabled = stateManager.get('assistantEnabled') !== false;
+    let modelInfo = stateManager.get('fullModelInfo');
+
+    // If model info is not cached yet, try to get it from MLService
+    if (!modelInfo && mlService) {
       try {
-        await mlService.trainModel();
-        console.log('[Background] Model training completed');
-        // 训练完成后再触发一次预测更新（模型可能改善）
-        try {
-          const postTrainPrediction = await mlService.getPrediction();
-          messageRouter.broadcast('popup', {
-            type: 'predictionUpdate',
-            data: postTrainPrediction
-          });
-        } catch (e) {
-          console.warn('[Background] Post-train prediction failed:', e);
+        const freshModelInfo = await mlService.getModelInfo();
+        if (freshModelInfo && freshModelInfo.status === 'ready') {
+          modelInfo = freshModelInfo;
+          // Cache it for future requests
+          stateManager.set('fullModelInfo', modelInfo);
         }
       } catch (error) {
-        console.error('[Background] Training failed:', error);
+        console.warn('[Background] Failed to retrieve fresh model info:', error);
       }
     }
-    
+
+    const data = {
+      type: 'initialData',
+      data: {
+        sequence: sequence.slice(-100),
+        paused: pauseState,
+        guidanceEnabled: guidanceEnabled,
+        modelInfo: modelInfo || { status: 'loading' },
+        timestamp: Date.now()
+      }
+    };
+
+    if (port) {
+      // Send to specific port
+      port.postMessage(data);
+    } else {
+      // Broadcast to all popup connections
+      messageRouter.broadcast('popup', data);
+    }
   } catch (error) {
-    console.error('[Background] Error handling user action:', error);
+    console.error('[Background] Error broadcasting complete data snapshot:', error);
   }
 }
 
-async function handleBrowserActionEvent(message: any, sender: any): Promise<void> {
+// Event handlers
+async function handleSynapseEvent(message: any, _sender: any): Promise<void> {
   try {
     if (stateManager.get('extensionPaused')) {
       return;
     }
 
-    const tabId: number | null = sender.tab?.id ?? null;
-    const windowId: number | null = sender.tab?.windowId ?? null;
-    let tabInfo: chrome.tabs.Tab | undefined = sender.tab;
-    if (!tabInfo && tabId !== null) {
+    // Check if message is already a SynapseEvent (from new content.ts)
+    if (message.timestamp && message.type && message.context && message.payload) {
+      console.log('[Background] Processing SynapseEvent:', message.type);
+      
+      // Store the clean event directly
+      await dataStorage.addToSequence('globalActionSequence', message);
+      
+      // Forward to ML service
+      await mlService.processEvent(message);
+      
+      // Broadcast to connected clients
+      messageRouter.broadcast('popup', {
+        type: 'eventAdded',
+        data: message
+      });
+
+      // Get latest prediction and broadcast
       try {
-        tabInfo = await browser.tabs.get(tabId);
-      } catch {
-        // ignore
+        const prediction = await mlService.getPrediction();
+        messageRouter.broadcast('popup', {
+          type: 'predictionUpdate',
+          data: prediction
+        });
+        
+        // Send to all content scripts for confidence display
+        const tabs = await browser.tabs.query({});
+        tabs.forEach((tab: any) => {
+          if (tab.id) {
+            browser.tabs.sendMessage(tab.id, { 
+              type: 'PREDICTION_UPDATE', 
+              data: { confidence: prediction.confidence * 100 } // Convert to percentage
+            }).catch(() => {
+              // Tab might not have content script, ignore
+            });
+          }
+        });
+      } catch (predErr) {
+        console.warn('[Background] Prediction attempt failed (will continue):', predErr);
       }
+      
+      // Check if training is needed
+      const sequence = await dataStorage.getSequence('globalActionSequence');
+      if (sequence.length % 50 === 0 && sequence.length >= 20) {
+        try {
+          await mlService.trainModel();
+          console.log('[Background] Model training completed');
+          // Post-train prediction update
+          try {
+            const postTrainPrediction = await mlService.getPrediction();
+            messageRouter.broadcast('popup', {
+              type: 'predictionUpdate',
+              data: postTrainPrediction
+            });
+            
+            // Send to all content scripts for confidence display
+            const tabs = await browser.tabs.query({});
+            tabs.forEach((tab: any) => {
+              if (tab.id) {
+                browser.tabs.sendMessage(tab.id, { 
+                  type: 'PREDICTION_UPDATE', 
+                  data: { confidence: postTrainPrediction.confidence * 100 } // Convert to percentage
+                }).catch(() => {
+                  // Tab might not have content script, ignore
+                });
+              }
+            });
+          } catch (e) {
+            console.warn('[Background] Post-train prediction failed:', e);
+          }
+        } catch (error) {
+          console.error('[Background] Training failed:', error);
+        }
+      }
+      
+      return;
     }
-
-    const event: EnrichedEvent | any = {
-      type: message.type,
-      payload: message.payload,
-      timestamp: Date.now(),
-      context: {
-        tabId,
-        windowId,
-        tabInfo
-      }
-    };
-
-    await dataStorage.addToSequence('globalActionSequence', event);
     
-    messageRouter.broadcast('popup', {
-      type: 'eventAdded',
-      data: event
-    });
-    
+    console.warn('[Background] Received malformed event:', message);
   } catch (error) {
-    console.error('[Background] Error handling browser action:', error);
+    console.error('[Background] Error handling SynapseEvent:', error);
   }
 }
+
 
 async function handlePauseMessage(): Promise<any> {
   stateManager.set('extensionPaused', true);
@@ -521,24 +543,125 @@ async function handleGetStateMessage(): Promise<any> {
   }
 }
 
+// Floating Control Center handlers
+async function handleFloatingControlToggleMonitoring(): Promise<any> {
+  try {
+    const currentState = stateManager.get('extensionPaused') || false;
+    const newState = !currentState;
+    
+    stateManager.set('extensionPaused', newState);
+    messageRouter.broadcast('popup', { type: 'pauseStateChanged', data: newState });
+    
+    // Send to all content scripts to show/hide the control center feedback
+    const tabs = await browser.tabs.query({});
+    tabs.forEach((tab: any) => {
+      if (tab.id) {
+        browser.tabs.sendMessage(tab.id, { 
+          type: 'MONITORING_STATE_CHANGED', 
+          data: { monitoring: !newState } 
+        }).catch(() => {
+          // Tab might not have content script, ignore
+        });
+      }
+    });
+    
+    return { success: true, monitoring: !newState };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    return { success: false, error: errorMessage };
+  }
+}
+
+async function handleFloatingControlExportData(): Promise<any> {
+  try {
+    const data = await dataStorage.exportData();
+    
+    // Send to all content scripts to show export success
+    const tabs = await browser.tabs.query({ active: true, currentWindow: true });
+    if (tabs[0]?.id) {
+      browser.tabs.sendMessage(tabs[0].id, { 
+        type: 'SHOW_NOTIFICATION', 
+        data: { message: 'Data exported successfully', type: 'success' } 
+      }).catch(() => {
+        // Tab might not have content script, ignore
+      });
+    }
+    
+    return { success: true, data };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    return { success: false, error: errorMessage };
+  }
+}
+
+async function handleFloatingControlToggleSmartAssistant(): Promise<any> {
+  try {
+    const currentState = stateManager.get('assistantEnabled') !== false;
+    const newState = !currentState;
+    
+    stateManager.set('assistantEnabled', newState);
+    stateManager.markAsPersistent('assistantEnabled');
+    
+    // Send to all content scripts
+    const tabs = await browser.tabs.query({});
+    tabs.forEach((tab: any) => {
+      if (tab.id) {
+        browser.tabs.sendMessage(tab.id, { 
+          type: 'ASSISTANT_STATE_CHANGED', 
+          data: { enabled: newState } 
+        }).catch(() => {
+          // Tab might not have content script, ignore
+        });
+      }
+    });
+    
+    return { success: true, enabled: newState };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    return { success: false, error: errorMessage };
+  }
+}
+
+async function handleFloatingControlOpenDebugTools(): Promise<any> {
+  try {
+    // Open popup in new tab for debug tools access
+    const popupUrl = browser.runtime.getURL('popup.html');
+    await browser.tabs.create({ url: popupUrl });
+    
+    return { success: true };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    return { success: false, error: errorMessage };
+  }
+}
+
+async function handleFloatingControlOpenSettings(): Promise<any> {
+  try {
+    // Open extension options page or popup
+    const optionsUrl = browser.runtime.getURL('popup.html');
+    await browser.tabs.create({ url: optionsUrl });
+    
+    return { success: true };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    return { success: false, error: errorMessage };
+  }
+}
+
 // Connection message handlers
 async function handlePopupMessage(port: any, message: any): Promise<void> {
   try {
     if (message.type === 'requestInitialData') {
-      await sendInitialDataToPopup(port);
-    } else if (message.messageId) {
-      // Handle request-response pattern
-      // Get the handler from the message router
+      await broadcastCompleteDataSnapshot(port);
+    } else {
+      // Handle simple messages without response
       const handler = messageRouter.messageHandlers.get(message.type);
-      const response = await handler?.(message, null, null);
-      port.postMessage({ messageId: message.messageId, data: response });
+      if (handler) {
+        await handler(message, null, null);
+      }
     }
   } catch (error) {
     console.error('[Background] Error handling popup message:', error);
-    if (message.messageId) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      port.postMessage({ messageId: message.messageId, error: errorMessage });
-    }
   }
 }
 
@@ -554,48 +677,6 @@ async function handleAssistantMessage(port: any, message: any): Promise<void> {
   }
 }
 
-async function sendInitialDataToPopup(port: any): Promise<void> {
-  try {
-    const sequence = await dataStorage.getSequence('globalActionSequence');
-    const pauseState = stateManager.get('extensionPaused') || false;
-    // [关键修改] 直接从状态管理器获取缓存好的完整模型信息
-    let modelInfo = stateManager.get('fullModelInfo');
-
-    // If model info is not cached yet, try to get it from MLService
-    if (!modelInfo && mlService) {
-      console.log('[Background] Model info not cached, attempting to retrieve...');
-      try {
-        const freshModelInfo = await mlService.getModelInfo();
-        if (freshModelInfo && freshModelInfo.info) {
-          modelInfo = {
-            info: freshModelInfo.info,
-            isReady: true,
-            workerReady: true,
-            workerStatus: 'ready'
-          };
-          // Cache it for future requests
-          stateManager.set('fullModelInfo', modelInfo);
-          console.log('[Background] Fresh model info retrieved and cached:', modelInfo);
-        }
-      } catch (error) {
-        console.warn('[Background] Failed to retrieve fresh model info:', error);
-      }
-    }
-
-    port.postMessage({
-      type: 'initialData',
-      data: {
-        sequence: sequence.slice(-100),
-        paused: pauseState,
-        // 如果 modelInfo 存在，则直接发送；否则发送一个 loading 状态
-        modelInfo: modelInfo || { workerStatus: 'loading', isReady: false },
-        timestamp: Date.now()
-      }
-    });
-  } catch (error) {
-    console.error('[Background] Error sending initial data:', error);
-  }
-}
 
 // Initialize everything when the background script loads
 

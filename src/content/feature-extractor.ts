@@ -1,0 +1,262 @@
+import { SynapseEvent } from '../shared/types';
+import { generateGeneralizedURL, getModifierKeys } from '../shared/utils';
+
+/**
+ * Optimized function to generate a stable CSS selector for a given element.
+ * Prioritizes stable attributes and limits depth for performance.
+ */
+export function getCssSelector(el: HTMLElement): string {
+  if (!(el instanceof Element)) {
+    return 'unknown';
+  }
+
+  const selectorParts: string[] = [];
+  let currentElement = el as Element;
+  let depth = 0;
+  const maxDepth = 5;
+
+  while (currentElement && currentElement !== document.body && depth < maxDepth) {
+    let selector = '';
+
+    const testId = currentElement.getAttribute('data-testid') || currentElement.getAttribute('data-test');
+    if (testId) {
+      return `[data-testid="${testId}"]`;
+    }
+
+    if (currentElement.id) {
+      return `#${currentElement.id}`;
+    }
+
+    const ariaLabel = currentElement.getAttribute('aria-label');
+    const role = currentElement.getAttribute('role');
+    const name = currentElement.getAttribute('name');
+    
+    if (ariaLabel && ariaLabel.length < 30) {
+      return `[aria-label="${ariaLabel}"]`;
+    }
+    
+    if (role && ['button', 'link', 'textbox', 'checkbox', 'radio'].includes(role)) {
+      selector = `[role="${role}"]`;
+    } else if (name && name.length < 20) {
+      selector = `[name="${name}"]`;
+    } else {
+      selector = currentElement.tagName.toLowerCase();
+
+      if (currentElement.className && typeof currentElement.className === 'string') {
+        const classes = currentElement.className.split(' ')
+          .filter(cls => cls.length > 0 && cls.length < 20 && !cls.startsWith('_'))
+          .slice(0, 2);
+        
+        if (classes.length > 0) {
+          selector += '.' + classes.join('.');
+        }
+      }
+
+      const siblings = Array.from(currentElement.parentElement?.children || [])
+        .filter(sibling => sibling.tagName === currentElement.tagName);
+      
+      if (siblings.length > 1) {
+        const index = siblings.indexOf(currentElement) + 1;
+        selector += `:nth-of-type(${index})`;
+      }
+    }
+
+    selectorParts.unshift(selector);
+    currentElement = currentElement.parentElement as Element;
+    depth++;
+  }
+
+  return selectorParts.length > 0 ? selectorParts.join(' > ') : 'unknown';
+}
+
+/**
+ * Extract generalized features from DOM elements
+ */
+export function extractElementFeatures(element: HTMLElement, url: string): Record<string, any> {
+  const features: Record<string, any> = {};
+  
+  if (element.getAttribute('role')) {
+    features.element_role = element.getAttribute('role')!;
+  } else {
+    const tagName = element.tagName.toLowerCase();
+    switch (tagName) {
+      case 'button':
+      case 'input':
+        if ((element as HTMLInputElement).type === 'submit') {
+          features.element_role = 'button';
+        } else if ((element as HTMLInputElement).type === 'text' || (element as HTMLInputElement).type === 'email') {
+          features.element_role = 'textbox';
+        } else {
+          features.element_role = tagName;
+        }
+        break;
+      case 'a':
+        features.element_role = 'link';
+        break;
+      case 'textarea':
+        features.element_role = 'textbox';
+        break;
+      default:
+        features.element_role = tagName;
+    }
+  }
+  
+  const text = element.textContent || element.getAttribute('value') || element.getAttribute('placeholder') || '';
+  features.element_text = text.toLowerCase().trim().substring(0, 50);
+  
+  if (element.tagName.toLowerCase() === 'a') {
+    const href = element.getAttribute('href');
+    if (href) {
+      try {
+        const linkUrl = new URL(href, url);
+        const currentUrl = new URL(url);
+        features.is_nav_link = linkUrl.hostname !== currentUrl.hostname || 
+                              href.startsWith('#') || 
+                              element.textContent?.toLowerCase().includes('nav') ||
+                              element.className.toLowerCase().includes('nav');
+      } catch {
+        features.is_nav_link = false;
+      }
+    }
+  } else {
+    features.is_nav_link = false;
+  }
+  
+  features.is_input_field = ['input', 'textarea', 'select'].includes(element.tagName.toLowerCase());
+  
+  if (element.tagName.toLowerCase() === 'input') {
+    const inputElement = element as HTMLInputElement;
+    features.is_password_field = inputElement.type === 'password' || 
+                                 inputElement.autocomplete?.includes('password') ||
+                                 inputElement.name?.toLowerCase().includes('password') ||
+                                 inputElement.placeholder?.toLowerCase().includes('password');
+  } else {
+    features.is_password_field = false;
+  }
+  
+  const urlObj = new URL(url);
+  const urlFeatures = {
+    domain: urlObj.hostname,
+    domain_hash: simpleStringHash(urlObj.hostname),
+    page_type: inferPageType(url, element),
+    page_type_confidence: 0.8,
+    path_depth: urlObj.pathname.split('/').filter(p => p.length > 0).length,
+    path_component_types: ['unknown'],
+    path_keywords: [],
+    query_param_count: Array.from(urlObj.searchParams.keys()).length,
+    query_param_keys: Array.from(urlObj.searchParams.keys()),
+    query_param_key_hash: simpleStringHash(Array.from(urlObj.searchParams.keys()).join(',')),
+    has_fragment: urlObj.hash.length > 0
+  };
+  
+  function simpleStringHash(str: string): number {
+    let hash = 0;
+    if (str.length === 0) return hash;
+    
+    for (let i = 0; i < str.length; i++) {
+      const char = str.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash;
+    }
+    
+    return Math.abs(hash);
+  }
+  
+  features.domain = urlFeatures.domain;
+  features.domain_hash = urlFeatures.domain_hash;
+  features.path_depth = urlFeatures.path_depth;
+  features.page_type = urlFeatures.page_type;
+  features.page_type_confidence = urlFeatures.page_type_confidence;
+  features.path_component_types = urlFeatures.path_component_types;
+  features.path_keywords = urlFeatures.path_keywords;
+  features.query_param_count = urlFeatures.query_param_count;
+  features.query_param_keys = urlFeatures.query_param_keys;
+  features.query_param_key_hash = urlFeatures.query_param_key_hash;
+  features.has_fragment = urlFeatures.has_fragment;
+  
+  return features;
+}
+
+/**
+ * Infer page type using heuristics
+ */
+export function inferPageType(url: string, element?: HTMLElement): string {
+  const path = url.toLowerCase();
+  
+  if (path.includes('github')) return 'code_repository';
+  if (path.includes('stackoverflow')) return 'qa_forum';
+  if (path.includes('/search')) return 'search_results';
+  if (path.includes('/login') || path.includes('/signin')) return 'authentication';
+  if (path.includes('/settings') || path.includes('/config')) return 'settings';
+  
+  return 'general';
+}
+
+/**
+ * Create a standardized SynapseEvent from raw DOM event data.
+ */
+export function createSynapseEvent(
+  type: string,
+  element?: HTMLElement | null,
+  rawEvent?: Event,
+  additionalFeatures: Record<string, any> = {}
+): SynapseEvent {
+  const now = Date.now();
+  const url = window.location.href;
+  const title = document.title || '';
+  
+  let tabId: number | null = null;
+  let windowId: number | null = null;
+  
+  const features: Record<string, any> = { ...additionalFeatures };
+  
+  let targetSelector: string | undefined;
+  let position: { x: number, y: number } | undefined;
+  let value: string | number | boolean | undefined;
+
+  if (element) {
+    targetSelector = getCssSelector(element);
+    const elementFeatures = extractElementFeatures(element, url);
+    Object.assign(features, elementFeatures);
+  }
+
+  if (rawEvent) {
+    if ('clientX' in rawEvent && 'clientY' in rawEvent) {
+      position = { 
+        x: (rawEvent as MouseEvent).clientX, 
+        y: (rawEvent as MouseEvent).clientY 
+      };
+    }
+
+    if ('key' in rawEvent) {
+      value = (rawEvent as KeyboardEvent).key;
+      features.keyCode = (rawEvent as KeyboardEvent).keyCode;
+      features.modifierKeys = getModifierKeys(rawEvent as KeyboardEvent);
+    }
+
+    if (type.includes('scroll')) {
+      features.scrollY = window.scrollY;
+      features.scrollX = window.scrollX;
+      features.documentHeight = document.documentElement.scrollHeight;
+      features.viewportHeight = window.innerHeight;
+      features.scrollPercentage = (window.scrollY / (document.documentElement.scrollHeight - window.innerHeight)) * 100;
+    }
+  }
+
+  return {
+    timestamp: now,
+    type,
+    context: {
+      tabId,
+      windowId, 
+      url: generateGeneralizedURL(url),
+      title
+    },
+    payload: {
+      targetSelector,
+      value,
+      position,
+      features
+    }
+  };
+}
