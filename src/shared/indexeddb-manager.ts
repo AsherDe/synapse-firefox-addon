@@ -12,8 +12,6 @@ interface SynapseDB extends IDBDatabase {
   // Type-safe database interface
 }
 
-interface EventRecord {
-}
 
 class IndexedDBManager {
   private dbName = 'synapse-events';
@@ -89,7 +87,7 @@ class IndexedDBManager {
     
     domain = this.extractDomain(url);
     
-    const eventRecord: EventRecord = {
+    const eventRecord = {
       id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
       event: event,
       timestamp: event.timestamp
@@ -137,7 +135,7 @@ class IndexedDBManager {
         
         domain = this.extractDomain(url);
         
-        const eventRecord: EventRecord = {
+        const eventRecord = {
           id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
           event: event,
           timestamp: event.timestamp
@@ -181,7 +179,7 @@ class IndexedDBManager {
       request.onsuccess = () => {
         const cursor = request.result;
         if (cursor && events.length < limit) {
-          const eventRecord = cursor.value as EventRecord;
+          const eventRecord = cursor.value as { id: string; event: SynapseEvent; timestamp: number };
           events.push(eventRecord.event);
           cursor.continue();
         } else {
@@ -215,7 +213,7 @@ class IndexedDBManager {
       request.onsuccess = () => {
         const cursor = request.result;
         if (cursor) {
-          const eventRecord = cursor.value as EventRecord;
+          const eventRecord = cursor.value as { id: string; event: SynapseEvent; timestamp: number };
           events.push(eventRecord.event);
           cursor.continue();
         } else {
@@ -280,7 +278,7 @@ class IndexedDBManager {
       request.onsuccess = () => {
         const cursor = request.result;
         if (cursor) {
-          const record = cursor.value as EventRecord;
+          const record = cursor.value as { id: string; event: SynapseEvent; timestamp: number };
           totalEvents++;
           
           // Update timestamp range
