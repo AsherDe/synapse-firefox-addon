@@ -13,9 +13,6 @@ interface SynapseDB extends IDBDatabase {
 }
 
 interface EventRecord {
-  id: string;
-  event: SynapseEvent;
-  timestamp: number;
 }
 
 class IndexedDBManager {
