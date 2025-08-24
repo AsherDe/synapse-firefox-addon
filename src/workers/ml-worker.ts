@@ -331,11 +331,13 @@ class SynapseMLWorker {
   }
 }
 
+// Create singleton worker instance
+const worker = new SynapseMLWorker();
+
 // Worker message handling
 self.onmessage = async (e) => {
   const { type, action, data, requestId } = e.data;
   const messageType = type || action; // Support both formats for compatibility
-  const worker = new SynapseMLWorker();
   
   try {
     switch (messageType) {
