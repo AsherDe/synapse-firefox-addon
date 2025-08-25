@@ -116,6 +116,14 @@ export function setupSmartAssistantBridge(): void {
           sendResponse({ success: false, error: String(error) });
         }
         return true;
+      } else if (message.type === 'INTELLIGENT_FOCUS_UPDATE') {
+        // Forward intelligent focus suggestions to smart assistant
+        window.postMessage({
+          _target: 'smart-assistant',
+          _fromBackground: true,
+          type: 'intelligentFocusSuggestion',
+          data: message.data
+        }, '*');
       } else {
         window.postMessage({
           _target: 'smart-assistant',

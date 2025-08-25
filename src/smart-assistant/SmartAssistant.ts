@@ -64,6 +64,12 @@ export class SmartAssistant {
     this.messagingService.onMessage('learnedSkills', (message) => {
       this.updateLearnedPatterns(message.data);
     });
+    
+    this.messagingService.onMessage('intelligentFocusSuggestion', (message) => {
+      if (this.state.isEnabled && message.data?.suggestions?.length > 0) {
+        this.renderIntelligentFocus(message.data.suggestions);
+      }
+    });
   }
 
   private async loadSettings(): Promise<void> {
@@ -447,6 +453,147 @@ export class SmartAssistant {
       this.clearSubtleHints();
       
       await this.feedbackCollector.recordHintInteraction(hint.id, true);
+    }
+  }
+
+  /**
+   * Render intelligent focus suggestions as numbered overlays
+   */
+  private renderIntelligentFocus(suggestions: OperationSuggestion[]): void {
+    // Clear any existing focus overlays
+    this.clearIntelligentFocus();
+    
+    suggestions.slice(0, 9).forEach((suggestion, index) => {
+      const keyNumber = index + 1;
+      const action = suggestion.actions[0];
+      
+      if (!action?.target) return;
+      
+      const targetElement = document.querySelector(action.target) as HTMLElement;
+      if (!targetElement) return;
+      
+      // Create focus overlay
+      const overlay = document.createElement('div');
+      overlay.className = 'synapse-intelligent-focus-overlay';
+      overlay.id = `synapse-focus-${keyNumber}`;
+      overlay.textContent = keyNumber.toString();
+      
+      const rect = targetElement.getBoundingClientRect();
+      overlay.style.position = 'fixed';
+      overlay.style.top = `${rect.top - 15}px`;
+      overlay.style.left = `${rect.right - 15}px`;
+      overlay.style.width = '24px';
+      overlay.style.height = '24px';
+      overlay.style.backgroundColor = '#4CAF50';
+      overlay.style.color = 'white';
+      overlay.style.borderRadius = '50%';
+      overlay.style.display = 'flex';
+      overlay.style.alignItems = 'center';
+      overlay.style.justifyContent = 'center';
+      overlay.style.fontSize = '14px';
+      overlay.style.fontWeight = 'bold';
+      overlay.style.zIndex = '9999';
+      overlay.style.cursor = 'pointer';
+      overlay.style.border = '2px solid #45a049';
+      overlay.style.boxShadow = '0 2px 8px rgba(0,0,0,0.3)';
+      
+      // Add click handler
+      overlay.addEventListener('click', () => {
+        this.executeIntelligentFocusAction(suggestion, action);
+      });
+      
+      document.body.appendChild(overlay);
+    });
+    
+    // Set up keyboard listener for number keys
+    this.setupIntelligentFocusKeyListener(suggestions);
+    
+    // Auto-clear after 30 seconds
+    setTimeout(() => this.clearIntelligentFocus(), 30000);
+  }
+  
+  /**
+   * Clear intelligent focus overlays
+   */
+  private clearIntelligentFocus(): void {
+    const overlays = document.querySelectorAll('.synapse-intelligent-focus-overlay');
+    overlays.forEach(overlay => overlay.remove());
+    this.removeIntelligentFocusKeyListener();
+  }
+  
+  /**
+   * Setup keyboard listener for intelligent focus
+   */
+  private setupIntelligentFocusKeyListener(suggestions: OperationSuggestion[]): void {
+    this.intelligentFocusKeyHandler = (event: KeyboardEvent) => {
+      const key = event.key;
+      if (/^[1-9]$/.test(key)) {
+        const index = parseInt(key) - 1;
+        if (index < suggestions.length) {
+          const suggestion = suggestions[index];
+          const action = suggestion.actions[0];
+          if (action) {
+            event.preventDefault();
+            this.executeIntelligentFocusAction(suggestion, action);
+          }
+        }
+      } else if (key === 'Escape') {
+        event.preventDefault();
+        this.clearIntelligentFocus();
+      }
+    };
+    
+    document.addEventListener('keydown', this.intelligentFocusKeyHandler, true);
+  }
+  
+  private intelligentFocusKeyHandler: ((event: KeyboardEvent) => void) | null = null;
+  
+  /**
+   * Remove keyboard listener for intelligent focus
+   */
+  private removeIntelligentFocusKeyListener(): void {
+    if (this.intelligentFocusKeyHandler) {
+      document.removeEventListener('keydown', this.intelligentFocusKeyHandler, true);
+      this.intelligentFocusKeyHandler = null;
+    }
+  }
+  
+  /**
+   * Execute an intelligent focus action
+   */
+  private async executeIntelligentFocusAction(suggestion: OperationSuggestion, action: any): Promise<void> {
+    try {
+      const targetElement = document.querySelector(action.target) as HTMLElement;
+      if (!targetElement) return;
+      
+      // Clear overlays first
+      this.clearIntelligentFocus();
+      
+      // Execute the action based on type
+      switch (action.type) {
+        case 'click':
+          targetElement.click();
+          break;
+        case 'text_input':
+          if (action.value && targetElement instanceof HTMLInputElement) {
+            targetElement.focus();
+            targetElement.value = action.value;
+            targetElement.dispatchEvent(new Event('input', { bubbles: true }));
+          }
+          break;
+        case 'scroll':
+          targetElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          break;
+        default:
+          targetElement.click();
+          break;
+      }
+      
+      // Send feedback to background
+      await this.feedbackCollector.recordHintInteraction(suggestion.id, true);
+      
+    } catch (error) {
+      console.error('[SmartAssistant] Failed to execute intelligent focus action:', error);
     }
   }
 
