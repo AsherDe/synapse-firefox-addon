@@ -74,6 +74,7 @@ export class PopupController {
         
       case 'predictionUpdate':
         this.uiManager.updatePredictionDisplay(message.data);
+        this.dataExporter.addPredictionEntry(message.data);
         break;
         
       case 'modelInfoUpdate':
@@ -109,6 +110,7 @@ export class PopupController {
         }
         if (message.data.prediction) {
           this.uiManager.updatePredictionDisplay(message.data.prediction);
+          this.dataExporter.addPredictionEntry(message.data.prediction);
         }
         if (message.data.modelInfo) {
           const isReady = message.data.modelInfo.status === 'ready';
@@ -219,6 +221,9 @@ export class PopupController {
       }
       const prediction = response?.success ? response.data : response?.prediction;
       this.uiManager.updatePredictionDisplay(prediction);
+      if (prediction) {
+        this.dataExporter.addPredictionEntry(prediction);
+      }
     });
   }
 

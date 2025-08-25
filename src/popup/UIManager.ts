@@ -47,24 +47,44 @@ export class UIManager {
     const predictionElement = document.getElementById('predictionInfo');
     if (!predictionElement) return;
 
-    if (!prediction) {
-      predictionElement.innerHTML = '<div class="empty-state">No prediction available yet</div>';
+    if (!prediction || (prediction.suggestions && prediction.suggestions.length === 0)) {
+      let message = 'No prediction available yet.';
+      if (prediction?.reason === 'insufficient_context') {
+        message = 'Not enough interaction context to make predictions.';
+      } else if (prediction?.reason === 'low_confidence') {
+        message = 'Prediction confidence too low to show suggestions.';
+      } else if (prediction?.reason === 'no_input_sequence') {
+        message = 'No recent interactions to analyze.';
+      } else if (prediction?.reason === 'prediction_error') {
+        message = 'Prediction model encountered an error.';
+      }
+      predictionElement.innerHTML = `<div class="empty-state">${message}</div>`;
       return;
     }
-    const token = prediction.token || prediction.tokenId || 'unknown';
-    const confidence = typeof prediction.confidence === 'number' ? prediction.confidence : 0;
+
+    // Handle successful predictions
+    const suggestions = prediction.suggestions || [];
     const ts = prediction.timestamp || Date.now();
     const isRecent = (Date.now() - ts) < 30000;
 
+    if (suggestions.length === 0) {
+      predictionElement.innerHTML = '<div class="empty-state">No actionable suggestions available.</div>';
+      return;
+    }
+
+    const topSuggestion = suggestions[0];
+    const confidence = topSuggestion.confidence || 0;
+    
     predictionElement.innerHTML = `
       <div class="prediction-item ${isRecent ? 'recent' : 'stale'}">
         <div class="prediction-header">
-          <strong>Next Action Prediction</strong>
+          <strong>Smart Focus Suggestion</strong>
           <span class="prediction-time">${this.formatTime(ts)}</span>
         </div>
         <div class="prediction-details">
-          <div class="token-id">Token: <code>${token}</code></div>
+          <div class="suggestion-title">${topSuggestion.title || 'Next action'}</div>
           <div class="confidence">Confidence: <span class="confidence-bar" style="width: ${confidence * 100}%">${(confidence * 100).toFixed(1)}%</span></div>
+          ${suggestions.length > 1 ? `<div class="suggestion-count">+${suggestions.length - 1} more suggestions</div>` : ''}
         </div>
       </div>`;
   }

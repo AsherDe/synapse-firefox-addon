@@ -4,6 +4,7 @@ declare var browser: any;
 
 export class DataExporter {
   private sequence: SynapseEvent[] = [];
+  private predictionHistory: any[] = [];
 
   constructor(sequence: SynapseEvent[]) {
     this.sequence = sequence;
@@ -11,6 +12,19 @@ export class DataExporter {
 
   public updateSequence(newSequence: SynapseEvent[]): void {
     this.sequence = newSequence;
+  }
+
+  public addPredictionEntry(prediction: any): void {
+    this.predictionHistory.push({
+      ...prediction,
+      timestamp: Date.now(),
+      sequenceLength: this.sequence.length
+    });
+    
+    // Keep only recent predictions (last 100 entries)
+    if (this.predictionHistory.length > 100) {
+      this.predictionHistory = this.predictionHistory.slice(-100);
+    }
   }
 
   public async exportAllData(): Promise<void> {
@@ -54,6 +68,13 @@ export class DataExporter {
         sessionStorage: sessionData,
         localStorage: localData,
         modelInfo: modelData,
+        predictionHistory: {
+          entries: this.predictionHistory,
+          totalPredictions: this.predictionHistory.length,
+          lastPredictionTime: this.predictionHistory.length > 0 ? 
+            new Date(this.predictionHistory[this.predictionHistory.length - 1].timestamp).toISOString() : null,
+          predictionStats: this.getPredictionStats()
+        },
         runtimeInfo: {
           popupLoadTime: new Date().toISOString(),
           updateIntervalActive: false
@@ -162,6 +183,44 @@ export class DataExporter {
       lastHour: recentEvents.length,
       lastEvent: this.sequence.length > 0 ? new Date(this.sequence[this.sequence.length - 1].timestamp).toISOString() : null,
       avgEventsPerMinute: Math.round(recentEvents.length / 60 * 100) / 100
+    };
+  }
+
+  private getPredictionStats(): any {
+    if (this.predictionHistory.length === 0) {
+      return { noPredictionData: true };
+    }
+
+    const reasonCounts: Record<string, number> = {};
+    const suggestionCounts: number[] = [];
+    let totalSuggestions = 0;
+    let successfulPredictions = 0;
+
+    this.predictionHistory.forEach(prediction => {
+      if (prediction.reason) {
+        reasonCounts[prediction.reason] = (reasonCounts[prediction.reason] || 0) + 1;
+      }
+      
+      const suggestionCount = prediction.suggestions?.length || 0;
+      suggestionCounts.push(suggestionCount);
+      totalSuggestions += suggestionCount;
+      
+      if (suggestionCount > 0) {
+        successfulPredictions++;
+      }
+    });
+
+    return {
+      totalPredictions: this.predictionHistory.length,
+      successfulPredictions,
+      successRate: (successfulPredictions / this.predictionHistory.length * 100).toFixed(1) + '%',
+      avgSuggestionsPerPrediction: (totalSuggestions / this.predictionHistory.length).toFixed(2),
+      failureReasons: reasonCounts,
+      suggestionDistribution: {
+        min: Math.min(...suggestionCounts),
+        max: Math.max(...suggestionCounts),
+        avg: (totalSuggestions / this.predictionHistory.length).toFixed(2)
+      }
     };
   }
 }

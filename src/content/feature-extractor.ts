@@ -199,11 +199,13 @@ export function createSynapseEvent(
   type: string,
   element?: HTMLElement | null,
   rawEvent?: Event,
-  additionalFeatures: Record<string, any> = {}
+  additionalFeatures: Record<string, any> = {},
+  fallbackUrl?: string,
+  fallbackTitle?: string
 ): SynapseEvent {
   const now = Date.now();
-  const url = window.location.href;
-  const title = document.title || '';
+  const url = window.location.href || fallbackUrl || '';
+  const title = document.title || fallbackTitle || '';
   
   let tabId: number | null = null;
   let windowId: number | null = null;

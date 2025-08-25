@@ -1,5 +1,6 @@
 import { createSynapseEvent, inferPageType } from '../feature-extractor';
 import { sendToBackground, generateGeneralizedURL } from '../../shared/utils';
+import { lastKnownURL, lastKnownTitle } from '../index';
 
 export function setupPageVisibilityMonitoring(): void {
   let pageLoadTime = Date.now();
@@ -13,7 +14,7 @@ export function setupPageVisibilityMonitoring(): void {
       visibility_state: currentState,
       previous_state: lastVisibilityState,
       time_on_page: timeOnPage
-    });
+    }, lastKnownURL, lastKnownTitle);
 
     sendToBackground(synapseEvent);
     

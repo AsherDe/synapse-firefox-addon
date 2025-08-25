@@ -1,5 +1,6 @@
 import { createSynapseEvent, inferPageType } from '../feature-extractor';
 import { sendToBackground } from '../../shared/utils';
+import { lastKnownURL, lastKnownTitle } from '../index';
 
 /**
  * Advanced Mouse Trajectory Monitor
@@ -99,7 +100,7 @@ export class MouseTrajectoryMonitor {
       ...features,
       trajectory_start: this.trajectory[0],
       trajectory_end: this.trajectory[this.trajectory.length - 1]
-    });
+    }, lastKnownURL, lastKnownTitle);
     
     sendToBackground(synapseEvent);
     console.log('[Synapse] Trajectory sent with DCT compression');

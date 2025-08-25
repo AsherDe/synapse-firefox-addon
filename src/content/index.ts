@@ -14,6 +14,10 @@ import './monitors/MouseTrajectoryMonitor';
 
 declare var browser: any;
 
+// Context cache to ensure URL and title are always available
+export let lastKnownURL = window.location.href;
+export let lastKnownTitle = document.title;
+
 const eventThrottler = new EventThrottler();
 
 // Optimized click monitoring
@@ -21,8 +25,11 @@ document.addEventListener('click', (event: MouseEvent) => {
   const element = event.target as HTMLElement;
   
   eventThrottler.throttleEvent(event, () => {
-    const synapseEvent = createSynapseEvent('ui.click', element, event);
-    sendToBackground(synapseEvent);
+    const synapseEvent = createSynapseEvent('ui.click', element, event, {}, lastKnownURL, lastKnownTitle);
+    // Quality gate: only send events with valid target selectors
+    if (synapseEvent.payload.targetSelector && synapseEvent.payload.targetSelector !== 'unknown') {
+      sendToBackground(synapseEvent);
+    }
   });
 }, true);
 
@@ -51,20 +58,32 @@ document.addEventListener('keydown', (event: KeyboardEvent) => {
     const synapseEvent = createSynapseEvent('ui.keydown', target, event, {
       code: event.code,
       modifier_keys: modifierKeys
-    });
+    }, lastKnownURL, lastKnownTitle);
     
     sendToBackground(synapseEvent);
   });
 }, true);
 
+export function updateContextCache(): void {
+  lastKnownURL = window.location.href;
+  lastKnownTitle = document.title;
+}
+
 function initializeAdvancedEventMonitoring(): void {
   setupScrollMonitoring();
+  
+  // Update context cache on key events
+  document.addEventListener('DOMContentLoaded', updateContextCache);
+  window.addEventListener('popstate', updateContextCache);
+  
+  // Periodic context cache update for SPA navigation
+  setInterval(updateContextCache, 1000);
   
   window.addEventListener('beforeunload', () => {
     // Cleanup throttlers if needed
   });
   
-  console.log('[Synapse] Advanced event monitoring initialized with throttling and debouncing');
+  console.log('[Synapse] Advanced event monitoring initialized with context caching');
 }
 
 function initializeAllEventMonitoring(): void {
