@@ -4,7 +4,7 @@
  */
 
 import * as tf from '@tensorflow/tfjs';
-import { SynapseEvent } from '../shared/types';
+import { SynapseEvent, ActionSkill, TaskStep } from '../shared/types';
 import { OperationSuggestion } from '../smart-assistant/types';
 
 // Constants for K-means clustering
@@ -16,6 +16,11 @@ const MAX_FEATURES_FOR_KMEANS = 16;
 const SEQUENCE_LENGTH = 10;
 const HIDDEN_SIZE = 32;
 const VOCAB_SIZE = 1000;
+
+// Task sequence mining constants
+const MIN_TASK_LENGTH = 3;
+const MAX_TASK_LENGTH = 10;
+const MIN_TASK_FREQUENCY = 2;
 
 // Simple K-means implementation
 function simpleKMeans(data: number[][], k: number): number[][] {
@@ -96,6 +101,10 @@ class SynapseMLWorker {
   private selectorTransitions: Map<string, Map<string, number>> = new Map();
   private selectorVocabulary: Map<string, number> = new Map();
   private vocabularyIndex: number = 0;
+  
+  // Task sequence mining
+  private discoveredTasks: Map<string, ActionSkill> = new Map();
+  private sequencePatterns: Map<string, number> = new Map();
   
   constructor() {
     console.log('[ML Worker] Initialized - ready to process clean SynapseEvents');
@@ -271,24 +280,129 @@ class SynapseMLWorker {
   }
 
   /**
-   * GRU-based prediction with targetSelector suggestions
+   * Simplified sequence pattern mining to discover frequent task sequences
    */
-  public async predict(currentSequence: SynapseEvent[]): Promise<OperationSuggestion[]> {
+  private mineSequencePatterns(selectors: string[]): void {
+    for (let length = MIN_TASK_LENGTH; length <= Math.min(MAX_TASK_LENGTH, selectors.length); length++) {
+      for (let i = 0; i <= selectors.length - length; i++) {
+        const sequence = selectors.slice(i, i + length);
+        const sequenceKey = sequence.join(' -> ');
+        
+        this.sequencePatterns.set(sequenceKey, (this.sequencePatterns.get(sequenceKey) || 0) + 1);
+      }
+    }
+  }
+
+  /**
+   * Convert frequent patterns into ActionSkill task sequences
+   */
+  private updateDiscoveredTasks(): void {
+    for (const [sequenceKey, frequency] of this.sequencePatterns.entries()) {
+      if (frequency >= MIN_TASK_FREQUENCY) {
+        const selectors = sequenceKey.split(' -> ');
+        const taskId = this.hashString(sequenceKey).toString();
+        
+        const steps: TaskStep[] = selectors.map((selector, index) => ({
+          selector,
+          action: 'click', // Simplified - could be enhanced with actual action detection
+          step_number: index,
+          confidence: Math.min(0.9, frequency / 10)
+        }));
+
+        const task: ActionSkill = {
+          id: taskId,
+          name: `Task Sequence ${selectors.length} steps`,
+          description: `Frequent ${selectors.length}-step sequence`,
+          token_sequence: selectors.map(s => this.selectorToIndex(s)),
+          frequency: frequency,
+          confidence: Math.min(0.9, frequency / 10),
+          sequence_length: selectors.length,
+          steps,
+          is_task_sequence: true
+        };
+
+        this.discoveredTasks.set(taskId, task);
+      }
+    }
+  }
+
+  /**
+   * Check if current sequence matches the beginning of any discovered task
+   */
+  private matchTaskSequence(currentSelectors: string[]): ActionSkill | null {
+    if (currentSelectors.length < MIN_TASK_LENGTH) return null;
+
+    for (const task of this.discoveredTasks.values()) {
+      if (!task.steps || !task.is_task_sequence) continue;
+
+      const taskSelectors = task.steps.map(step => step.selector);
+      
+      // Check if current sequence matches the beginning of this task
+      if (currentSelectors.length <= taskSelectors.length) {
+        let matches = true;
+        for (let i = 0; i < currentSelectors.length; i++) {
+          if (currentSelectors[i] !== taskSelectors[i]) {
+            matches = false;
+            break;
+          }
+        }
+        
+        if (matches && currentSelectors.length < taskSelectors.length) {
+          return task; // Found a matching task that's not complete
+        }
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * GRU-based prediction with task path guidance support
+   */
+  public async predict(currentSequence: SynapseEvent[]): Promise<{
+    suggestions: OperationSuggestion[];
+    taskGuidance?: {
+      taskId: string;
+      currentStep: number;
+      totalSteps: number;
+      nextStep: TaskStep;
+    };
+  }> {
     if (!currentSequence || currentSequence.length === 0) {
-      return [];
+      return { suggestions: [] };
     }
 
     try {
-      // Get recent targetSelectors for frequency fallback
+      // Get recent targetSelectors for analysis
       const recentSelectors = currentSequence
         .filter(e => e.payload?.targetSelector)
         .map(e => e.payload.targetSelector!)
-        .slice(-5);
+        .slice(-10);
 
       if (recentSelectors.length === 0) {
-        return [];
+        return { suggestions: [] };
       }
 
+      // Check for task sequence match first
+      const matchingTask = this.matchTaskSequence(recentSelectors);
+      if (matchingTask && matchingTask.steps) {
+        const currentStep = recentSelectors.length - 1;
+        const nextStep = matchingTask.steps[currentStep + 1];
+        
+        if (nextStep) {
+          const taskGuidance = {
+            taskId: matchingTask.id,
+            currentStep: currentStep,
+            totalSteps: matchingTask.steps.length,
+            nextStep
+          };
+
+          const suggestions = this.createTaskGuidanceSuggestions(nextStep, currentSequence);
+          return { suggestions, taskGuidance };
+        }
+      }
+
+      // Fallback to regular prediction
       const lastSelector = recentSelectors[recentSelectors.length - 1];
       
       // Try GRU prediction first
@@ -303,11 +417,11 @@ class SynapseMLWorker {
       // Combine predictions
       const allPredictions = [...new Set([...gruPredictions, ...frequencyPredictions])];
       
-      return this.createOperationSuggestions(allPredictions, currentSequence);
+      return { suggestions: this.createOperationSuggestions(allPredictions, currentSequence) };
 
     } catch (error) {
       console.error('[ML Worker] Prediction error:', error);
-      return [];
+      return { suggestions: [] };
     }
   }
 
@@ -362,6 +476,29 @@ class SynapseMLWorker {
       .sort((a, b) => b[1] - a[1])
       .slice(0, 3)
       .map(entry => entry[0]);
+  }
+
+  /**
+   * Create task guidance suggestions for the next step
+   */
+  private createTaskGuidanceSuggestions(
+    nextStep: TaskStep,
+    context: SynapseEvent[]
+  ): OperationSuggestion[] {
+    return [{
+      id: `task_guidance_${Date.now()}`,
+      title: `Next Step: ${this.simplifySelector(nextStep.selector)}`,
+      description: `Continue task sequence - step ${nextStep.step_number + 1}`,
+      confidence: nextStep.confidence,
+      actions: [{
+        type: nextStep.action as 'click' | 'keydown' | 'text_input' | 'scroll',
+        target: nextStep.selector,
+        sequence: 0,
+        isPrivacySafe: true
+      }],
+      learnedFrom: 'task_path_guidance',
+      frequency: nextStep.confidence
+    }];
   }
 
   /**
@@ -427,26 +564,39 @@ class SynapseMLWorker {
   }
 
   /**
-   * Get detected skills/patterns
+   * Get detected skills/patterns including discovered task sequences
    */
-  public getSkills(): any[] {
-    // Return simple skills based on codebook
-    return [
-      {
-        id: 'basic_navigation',
-        name: 'Basic Navigation',
-        description: 'Click and scroll patterns',
-        frequency: 1.0,
-        confidence: 0.5
-      },
-      {
-        id: 'text_input',
-        name: 'Text Input',
-        description: 'Typing and form filling',
-        frequency: 0.8,
-        confidence: 0.4
-      }
-    ];
+  public getSkills(): ActionSkill[] {
+    const skills: ActionSkill[] = [];
+    
+    // Add discovered task sequences
+    for (const task of this.discoveredTasks.values()) {
+      skills.push(task);
+    }
+    
+    // Add basic skills if no tasks discovered
+    if (skills.length === 0) {
+      skills.push(
+        {
+          id: 'basic_navigation',
+          name: 'Basic Navigation',
+          description: 'Click and scroll patterns',
+          token_sequence: [],
+          frequency: 1.0,
+          confidence: 0.5
+        },
+        {
+          id: 'text_input',
+          name: 'Text Input',
+          description: 'Typing and form filling',
+          token_sequence: [],
+          frequency: 0.8,
+          confidence: 0.4
+        }
+      );
+    }
+    
+    return skills;
   }
 
   /**
@@ -462,6 +612,16 @@ class SynapseMLWorker {
     try {
       // Update frequency mappings for targetSelector transitions
       this.updateSelectorTransitions(sequence);
+      
+      // Mine sequence patterns for task discovery
+      const selectors = sequence
+        .filter(event => event.payload?.targetSelector)
+        .map(event => event.payload.targetSelector!);
+      
+      if (selectors.length >= MIN_TASK_LENGTH) {
+        this.mineSequencePatterns(selectors);
+        this.updateDiscoveredTasks();
+      }
       
       // Train GRU model if we have enough data
       let gruTrainingResult = null;
@@ -481,6 +641,8 @@ class SynapseMLWorker {
         codebookSize: this.codebook.length,
         vocabularySize: this.selectorVocabulary.size,
         transitionMappings: this.selectorTransitions.size,
+        discoveredTasks: this.discoveredTasks.size,
+        sequencePatterns: this.sequencePatterns.size,
         gruTraining: gruTrainingResult,
         timestamp: Date.now()
       };

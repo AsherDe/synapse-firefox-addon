@@ -2,11 +2,16 @@
  * State Manager - Centralized state management for the extension
  */
 
+import { TaskState } from '../../shared/types';
+
 // Browser API compatibility using webextension-polyfill
 declare var browser: any; // webextension-polyfill provides this globally
 
 interface ExtensionState {
   [key: string]: any;
+  activeTask?: TaskState | null;
+  isPaused?: boolean;
+  smartAssistantEnabled?: boolean;
 }
 
 type StateChangeListener = (newValue: any, oldValue: any) => void;
@@ -187,5 +192,63 @@ export class StateManager {
         }
       });
     }
+  }
+
+  // Task management convenience methods
+  
+  /**
+   * Set the active task state
+   */
+  setActiveTask(task: TaskState | null): void {
+    this.set('activeTask', task);
+  }
+
+  /**
+   * Get the active task state
+   */
+  getActiveTask(): TaskState | null {
+    return this.get('activeTask') || null;
+  }
+
+  /**
+   * Update the current step of the active task
+   */
+  updateTaskStep(stepNumber: number): void {
+    const activeTask = this.getActiveTask();
+    if (activeTask) {
+      activeTask.currentStep = stepNumber;
+      activeTask.lastActionAt = Date.now();
+      this.setActiveTask(activeTask);
+    }
+  }
+
+  /**
+   * Complete the active task
+   */
+  completeActiveTask(): void {
+    const activeTask = this.getActiveTask();
+    if (activeTask) {
+      activeTask.isActive = false;
+      this.setActiveTask(null);
+    }
+  }
+
+  /**
+   * Check if user is currently in a task
+   */
+  isInTask(): boolean {
+    const activeTask = this.getActiveTask();
+    return activeTask !== null && activeTask.isActive;
+  }
+
+  /**
+   * Check if task has timed out (no activity for 30 seconds)
+   */
+  isTaskTimedOut(): boolean {
+    const activeTask = this.getActiveTask();
+    if (!activeTask) return false;
+    
+    const timeout = 30 * 1000; // 30 seconds
+    return Date.now() - activeTask.lastActionAt > timeout;
   }
 }

@@ -47,7 +47,7 @@ export interface SynapseEvent {
 
 /**
  * Action skill representation for the ML model.
- * TODO: Consider if this needs to be updated for the new event structure.
+ * Extended to support task path sequences.
  */
 export interface ActionSkill {
   id: string;
@@ -56,4 +56,33 @@ export interface ActionSkill {
   token_sequence: number[];
   frequency: number;
   confidence: number;
+  
+  // Task path guidance extensions
+  sequence_length?: number;
+  steps?: TaskStep[];
+  is_task_sequence?: boolean;
+}
+
+/**
+ * Individual step in a task sequence
+ */
+export interface TaskStep {
+  selector: string;
+  action: string;
+  step_number: number;
+  confidence: number;
+}
+
+/**
+ * Task execution state for tracking user progress
+ */
+export interface TaskState {
+  taskId: string;
+  taskName: string;
+  currentStep: number;
+  totalSteps: number;
+  steps: TaskStep[];
+  startedAt: number;
+  lastActionAt: number;
+  isActive: boolean;
 }
