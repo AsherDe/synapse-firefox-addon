@@ -340,6 +340,90 @@ export class StyleInjector {
       .feedback-comment::placeholder {
         color: rgba(255,255,255,0.5);
       }
+
+      /* Task Path Guidance Styles */
+      .synapse-task-guidance-overlay {
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        backdrop-filter: blur(4px);
+        cursor: pointer;
+        transition: all 0.3s ease;
+      }
+
+      .synapse-task-guidance-overlay:hover {
+        transform: scale(1.05);
+        box-shadow: 0 6px 16px rgba(255, 107, 53, 0.5);
+      }
+
+      .task-guidance-content {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      .task-progress {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .progress-bar {
+        flex: 1;
+        height: 4px;
+        background: rgba(255, 255, 255, 0.3);
+        border-radius: 2px;
+        overflow: hidden;
+      }
+
+      .progress-fill {
+        height: 100%;
+        background: #fff;
+        border-radius: 2px;
+        transition: width 0.5s ease;
+      }
+
+      .progress-text {
+        font-size: 10px;
+        font-weight: 600;
+        white-space: nowrap;
+      }
+
+      .next-action {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        font-size: 11px;
+      }
+
+      .action-label {
+        opacity: 0.8;
+        font-weight: 400;
+      }
+
+      .action-description {
+        font-weight: 600;
+        text-transform: capitalize;
+      }
+
+      .synapse-task-target-highlight {
+        pointer-events: none;
+        transition: all 0.3s ease;
+      }
+
+      /* Pulse animation for task guidance */
+      @keyframes pulse {
+        0% {
+          opacity: 1;
+          transform: scale(1);
+        }
+        50% {
+          opacity: 0.8;
+          transform: scale(1.02);
+        }
+        100% {
+          opacity: 1;
+          transform: scale(1);
+        }
+      }
     `;
   }
 }

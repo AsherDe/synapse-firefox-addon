@@ -128,6 +128,21 @@ export class FeedbackCollector {
   }
 
   /**
+   * Record task step execution
+   */
+  public async recordTaskStepExecution(taskId: string, stepNumber: number, success: boolean): Promise<void> {
+    await this.messagingService.sendToContentScript({
+      type: 'taskStepExecuted',
+      data: {
+        taskId: taskId,
+        stepNumber: stepNumber,
+        success: success,
+        timestamp: Date.now()
+      }
+    });
+  }
+
+  /**
    * Get current feedback
    */
   public getCurrentFeedback(): UserFeedback | null {

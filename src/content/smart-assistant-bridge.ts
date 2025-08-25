@@ -116,6 +116,30 @@ export function setupSmartAssistantBridge(): void {
           sendResponse({ success: false, error: String(error) });
         }
         return true;
+      } else if (message.type === 'INTELLIGENT_FOCUS_UPDATE') {
+        // Forward intelligent focus suggestions to smart assistant
+        window.postMessage({
+          _target: 'smart-assistant',
+          _fromBackground: true,
+          type: 'intelligentFocusSuggestion',
+          data: message.data
+        }, '*');
+      } else if (message.type === 'TASK_PATH_GUIDANCE') {
+        // Forward task path guidance to smart assistant
+        window.postMessage({
+          _target: 'smart-assistant',
+          _fromBackground: true,
+          type: 'TASK_PATH_GUIDANCE',
+          data: message.data
+        }, '*');
+      } else if (message.type === 'INTELLIGENT_FOCUS_SUGGESTION') {
+        // Forward intelligent focus suggestions to smart assistant
+        window.postMessage({
+          _target: 'smart-assistant',
+          _fromBackground: true,
+          type: 'INTELLIGENT_FOCUS_SUGGESTION',
+          data: message.data
+        }, '*');
       } else {
         window.postMessage({
           _target: 'smart-assistant',

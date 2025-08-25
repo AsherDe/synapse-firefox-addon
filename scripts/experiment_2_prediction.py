@@ -21,14 +21,16 @@ import seaborn as sns
 # Optional deep learning support
 try:
     import tensorflow as tf
-    from tensorflow.keras.models import Sequential
-    from tensorflow.keras.layers import Embedding, LSTM, Dense, Dropout
+    from tensorflow.keras.models import Sequential, Model
+    from tensorflow.keras.layers import (Embedding, LSTM, GRU, Dense, Dropout, 
+                                       MultiHeadAttention, LayerNormalization, 
+                                       GlobalAveragePooling1D, Input)
     from tensorflow.keras.preprocessing.text import Tokenizer
     from tensorflow.keras.preprocessing.sequence import pad_sequences
     from tensorflow.keras.callbacks import EarlyStopping
     HAS_TENSORFLOW = True
 except ImportError:
-    print("Warning: TensorFlow not found. LSTM model will be skipped.")
+    print("Warning: TensorFlow not found. LSTM, GRU, and Transformer models will be skipped.")
     print("Install command: pip install tensorflow")
     HAS_TENSORFLOW = False
 
@@ -414,19 +416,201 @@ class PredictionExperiment:
         
         accuracy = accuracy_score(self.y_test, y_pred_lstm)
         
-        # 计算Top-3准确率
-        top3_preds = np.argsort(y_pred_proba, axis=1)[:, -3:]
-        top3_accuracy = np.mean([y_true in y_pred for y_true, y_pred in zip(self.y_test, top3_preds)])
+        # 计算增强评估指标
+        enhanced_metrics = self.evaluate_enhanced_metrics('lstm', y_pred_lstm, y_pred_proba)
         
         self.results['lstm'] = {
             'accuracy': accuracy,
-            'top3_accuracy': top3_accuracy,
-            'epochs_trained': len(history.history['loss'])
+            'epochs_trained': len(history.history['loss']),
+            **enhanced_metrics
         }
         
         print(f"训练轮数: {len(history.history['loss'])}")
         print(f"Top-1 准确率: {accuracy:.3f}")
-        print(f"Top-3 准确率: {top3_accuracy:.3f}")
+        print(f"Top-3 准确率: {enhanced_metrics['top_3_accuracy']:.3f}")
+        print(f"Top-5 准确率: {enhanced_metrics['top_5_accuracy']:.3f}")
+        print(f"新颖性分数: {enhanced_metrics['novelty']:.3f}")
+        print(f"多样性分数: {enhanced_metrics['diversity']:.3f}")
+        print(f"覆盖率: {enhanced_metrics['coverage']:.3f}")
+        
+        return accuracy
+    
+    def run_gru_model(self):
+        """训练并评估GRU模型"""
+        if not HAS_TENSORFLOW:
+            print("\n--- 跳过GRU模型 (需要TensorFlow) ---")
+            return 0
+            
+        print("\n--- GRU模型 ---")
+        
+        vocab_size = len(self.vocab)
+        seq_length = self.X_train.shape[1]
+        
+        # 构建GRU模型
+        model = Sequential([
+            Embedding(input_dim=vocab_size, output_dim=32, input_length=seq_length),
+            GRU(64, return_sequences=True, dropout=0.2, recurrent_dropout=0.2),
+            GRU(32, dropout=0.2, recurrent_dropout=0.2),
+            Dense(vocab_size, activation='softmax')
+        ])
+        
+        model.compile(
+            optimizer='adam',
+            loss='sparse_categorical_crossentropy',
+            metrics=['accuracy']
+        )
+        
+        print("模型架构:")
+        print(f"- 词汇表大小: {vocab_size}")
+        print(f"- 序列长度: {seq_length}")
+        print(f"- GRU层配置: 64->32 units with dropout")
+        
+        # 训练模型
+        early_stopping = EarlyStopping(monitor='val_loss', patience=3, restore_best_weights=True)
+        
+        history = model.fit(
+            self.X_train, self.y_train,
+            epochs=20,
+            batch_size=min(32, len(self.X_train)//4),
+            validation_split=0.2,
+            callbacks=[early_stopping],
+            verbose=1
+        )
+        
+        # 评估模型
+        y_pred_proba = model.predict(self.X_test, verbose=0)
+        y_pred_gru = np.argmax(y_pred_proba, axis=1)
+        
+        accuracy = accuracy_score(self.y_test, y_pred_gru)
+        
+        # 计算增强评估指标
+        enhanced_metrics = self.evaluate_enhanced_metrics('gru', y_pred_gru, y_pred_proba)
+        
+        self.results['gru'] = {
+            'accuracy': accuracy,
+            'epochs_trained': len(history.history['loss']),
+            'final_loss': history.history['loss'][-1],
+            'final_val_loss': history.history['val_loss'][-1] if 'val_loss' in history.history else None,
+            **enhanced_metrics
+        }
+        
+        print(f"训练轮数: {len(history.history['loss'])}")
+        print(f"最终损失: {history.history['loss'][-1]:.4f}")
+        if 'val_loss' in history.history:
+            print(f"最终验证损失: {history.history['val_loss'][-1]:.4f}")
+        print(f"Top-1 准确率: {accuracy:.3f}")
+        print(f"Top-3 准确率: {enhanced_metrics['top_3_accuracy']:.3f}")
+        print(f"Top-5 准确率: {enhanced_metrics['top_5_accuracy']:.3f}")
+        print(f"新颖性分数: {enhanced_metrics['novelty']:.3f}")
+        print(f"多样性分数: {enhanced_metrics['diversity']:.3f}")
+        print(f"覆盖率: {enhanced_metrics['coverage']:.3f}")
+        
+        return accuracy
+    
+    def run_transformer_model(self):
+        """训练并评估Transformer模型"""
+        if not HAS_TENSORFLOW:
+            print("\n--- 跳过Transformer模型 (需要TensorFlow) ---")
+            return 0
+            
+        print("\n--- Transformer模型 ---")
+        
+        vocab_size = len(self.vocab)
+        seq_length = self.X_train.shape[1]
+        embed_dim = 64
+        num_heads = 4
+        ff_dim = 128
+        
+        print("模型架构:")
+        print(f"- 词汇表大小: {vocab_size}")
+        print(f"- 序列长度: {seq_length}")
+        print(f"- 嵌入维度: {embed_dim}")
+        print(f"- 注意力头数: {num_heads}")
+        print(f"- 前馈维度: {ff_dim}")
+        
+        # 构建Transformer模型
+        inputs = Input(shape=(seq_length,))
+        
+        # Embedding layer
+        embedding_layer = Embedding(input_dim=vocab_size, output_dim=embed_dim)(inputs)
+        
+        # Transformer block
+        attention_output = MultiHeadAttention(
+            num_heads=num_heads, key_dim=embed_dim
+        )(embedding_layer, embedding_layer)
+        
+        # Add & Norm
+        attention_output = LayerNormalization(epsilon=1e-6)(embedding_layer + attention_output)
+        
+        # Feed Forward
+        ffn_output = Dense(ff_dim, activation="relu")(attention_output)
+        ffn_output = Dense(embed_dim)(ffn_output)
+        
+        # Add & Norm  
+        ffn_output = LayerNormalization(epsilon=1e-6)(attention_output + ffn_output)
+        
+        # Global average pooling
+        sequence_output = GlobalAveragePooling1D()(ffn_output)
+        
+        # Dropout and classification
+        sequence_output = Dropout(0.3)(sequence_output)
+        outputs = Dense(vocab_size, activation="softmax")(sequence_output)
+        
+        model = Model(inputs=inputs, outputs=outputs)
+        
+        model.compile(
+            optimizer=tf.keras.optimizers.Adam(learning_rate=0.001),
+            loss="sparse_categorical_crossentropy",
+            metrics=["accuracy"]
+        )
+        
+        # 训练模型
+        early_stopping = EarlyStopping(
+            monitor='val_loss', 
+            patience=5, 
+            restore_best_weights=True,
+            min_delta=0.001
+        )
+        
+        history = model.fit(
+            self.X_train, self.y_train,
+            epochs=30,
+            batch_size=min(16, len(self.X_train)//4),  # Smaller batch size for Transformer
+            validation_split=0.2,
+            callbacks=[early_stopping],
+            verbose=1
+        )
+        
+        # 评估模型
+        y_pred_proba = model.predict(self.X_test, verbose=0)
+        y_pred_transformer = np.argmax(y_pred_proba, axis=1)
+        
+        accuracy = accuracy_score(self.y_test, y_pred_transformer)
+        
+        # 计算增强评估指标
+        enhanced_metrics = self.evaluate_enhanced_metrics('transformer', y_pred_transformer, y_pred_proba)
+        
+        self.results['transformer'] = {
+            'accuracy': accuracy,
+            'epochs_trained': len(history.history['loss']),
+            'final_loss': history.history['loss'][-1],
+            'final_val_loss': history.history['val_loss'][-1] if 'val_loss' in history.history else None,
+            'num_heads': num_heads,
+            'embed_dim': embed_dim,
+            'ff_dim': ff_dim,
+            **enhanced_metrics
+        }
+        
+        print(f"训练轮数: {len(history.history['loss'])}")
+        print(f"最终损失: {history.history['loss'][-1]:.4f}")
+        if 'val_loss' in history.history:
+            print(f"最终验证损失: {history.history['val_loss'][-1]:.4f}")
+        print(f"Top-1 准确率: {accuracy:.3f}")
+        print(f"Top-3 准确率: {enhanced_metrics['top_3_accuracy']:.3f}")
+        print(f"Top-5 准确率: {enhanced_metrics['top_5_accuracy']:.3f}")
+        print(f"新颖性分数: {enhanced_metrics['novelty']:.3f}")
+        print(f"多样性分数: {enhanced_metrics['diversity']:.3f}")
+        print(f"覆盖率: {enhanced_metrics['coverage']:.3f}")
         
         return accuracy
 
@@ -666,17 +850,54 @@ class PredictionExperiment:
             else:
                 print(f"- 用户行为相对随机 (基线准确率: {baseline_acc:.1%})")
                 
-            if 'lstm' in self.results:
-                lstm_acc = self.results['lstm']['accuracy']
-                if lstm_acc > baseline_acc * 1.1:
-                    print(f"- LSTM模型显示出优势，建议进一步优化")
+            # 深度学习模型比较分析
+            deep_models = {k: v for k, v in self.results.items() if k in ['lstm', 'gru', 'transformer']}
+            
+            if len(deep_models) >= 2:
+                print(f"\n深度学习模型性能对比:")
+                accuracies = {model: metrics['accuracy'] for model, metrics in deep_models.items()}
+                sorted_models = sorted(accuracies.items(), key=lambda x: x[1], reverse=True)
+                
+                for i, (model, acc) in enumerate(sorted_models):
+                    print(f"  {i+1}. {model.upper()}: {acc:.3f}")
+                
+                best_model, best_acc = sorted_models[0]
+                if len(sorted_models) > 1:
+                    second_model, second_acc = sorted_models[1]
+                    improvement = (best_acc / second_acc - 1) * 100
+                    print(f"  → {best_model.upper()}性能最佳，比{second_model.upper()}高{improvement:.1f}%")
+                    
+                if best_acc > baseline_acc * 1.1:
+                    print(f"- 深度学习模型({best_model.upper()})显示出优势，建议进一步优化")
                 else:
-                    print(f"- LSTM模型提升有限，可能需要更多数据或特征工程")
+                    print(f"- 深度学习模型提升有限，可能需要更多数据或特征工程")
+                    
+                # Transformer特殊分析
+                if 'transformer' in deep_models:
+                    transformer_acc = deep_models['transformer']['accuracy']
+                    print(f"- Transformer模型表现: ", end="")
+                    if transformer_acc == best_acc:
+                        print(f"最佳，注意力机制有效捕获序列模式")
+                    elif transformer_acc >= np.mean([acc for acc in accuracies.values()]):
+                        print(f"良好，适合长序列依赖建模")
+                    else:
+                        print(f"一般，可能需要更多数据或调参优化")
+            
+            elif len(deep_models) == 1:
+                model_name, metrics = list(deep_models.items())[0]
+                model_acc = metrics['accuracy']
+                if model_acc > baseline_acc * 1.1:
+                    print(f"- {model_name.upper()}模型显示出优势，建议进一步优化")
+                else:
+                    print(f"- {model_name.upper()}模型提升有限，可能需要更多数据或特征工程")
 
 def main():
     parser = argparse.ArgumentParser(description='实验二: 下一动作预测')
     parser.add_argument('input_file', help='清洗后的CSV数据文件')
     parser.add_argument('--skip-lstm', action='store_true', help='跳过LSTM模型训练')
+    parser.add_argument('--skip-gru', action='store_true', help='跳过GRU模型训练')
+    parser.add_argument('--skip-transformer', action='store_true', help='跳过Transformer模型训练')
+    parser.add_argument('--skip-deep-learning', action='store_true', help='跳过所有深度学习模型训练')
     parser.add_argument('--ngram', type=int, default=3, help='N-gram模型的N值 (默认: 3)')
     args = parser.parse_args()
     
@@ -703,8 +924,14 @@ def main():
     exp.run_markov_baseline()
     exp.run_ngram_model(args.ngram)
     
-    if not args.skip_lstm:
-        exp.run_lstm_model()
+    # 运行深度学习模型
+    if not args.skip_deep_learning:
+        if not args.skip_lstm:
+            exp.run_lstm_model()
+        if not args.skip_gru:
+            exp.run_gru_model()
+        if not args.skip_transformer:
+            exp.run_transformer_model()
     
     # 分析和可视化
     exp.analyze_prediction_patterns()

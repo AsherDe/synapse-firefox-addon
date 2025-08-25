@@ -21,7 +21,9 @@ export class MessagingService {
     try {
       window.addEventListener('message', (event: MessageEvent) => {
         if (event.source === window && event.data._target === 'smart-assistant' && event.data._fromBackground) {
-          this.handleBackgroundMessage(event.data.message);
+          // Handle both direct messages and nested message structure
+          const message = event.data.message || event.data;
+          this.handleBackgroundMessage(message);
         }
       });
       

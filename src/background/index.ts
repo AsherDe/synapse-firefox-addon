@@ -2,7 +2,7 @@
  * Background Script - Main entry point with modular architecture
  */
 
-import { SynapseEvent } from '../shared/types';
+import { SynapseEvent, TaskState, TaskStep } from '../shared/types';
 import { MessageRouter } from './services/MessageRouter';
 import { StateManager } from './services/StateManager';
 import { DataStorage } from './services/DataStorage';
@@ -213,26 +213,23 @@ async function handleSynapseEvent(message: any, _sender: any): Promise<void> {
         data: message
       });
 
-      // Get latest prediction and broadcast
+      // Get latest prediction and handle task guidance
       try {
         const prediction = await mlService.getPrediction();
+        
+        // Check if we have task guidance
+        if (prediction.taskGuidance) {
+          await handleTaskGuidance(message, prediction.taskGuidance);
+        } else {
+          // Regular intelligent focus prediction
+          await handleIntelligentFocus(prediction);
+        }
+        
         messageRouter.broadcast('popup', {
           type: 'predictionUpdate',
           data: prediction
         });
         
-        // Send to all content scripts for confidence display
-        const tabs = await browser.tabs.query({});
-        tabs.forEach((tab: any) => {
-          if (tab.id) {
-            browser.tabs.sendMessage(tab.id, { 
-              type: 'PREDICTION_UPDATE', 
-              data: { confidence: prediction.confidence * 100 } // Convert to percentage
-            }).catch(() => {
-              // Tab might not have content script, ignore
-            });
-          }
-        });
       } catch (predErr) {
         console.warn('[Background] Prediction attempt failed (will continue):', predErr);
       }
@@ -277,6 +274,95 @@ async function handleSynapseEvent(message: any, _sender: any): Promise<void> {
     console.warn('[Background] Received malformed event:', message);
   } catch (error) {
     console.error('[Background] Error handling SynapseEvent:', error);
+  }
+}
+
+// Task guidance handling
+async function handleTaskGuidance(
+  currentEvent: SynapseEvent, 
+  taskGuidance: {
+    taskId: string;
+    currentStep: number;
+    totalSteps: number;
+    nextStep: TaskStep;
+  }
+): Promise<void> {
+  try {
+    // Check if this is a new task or continuing existing one
+    const activeTask = stateManager.getActiveTask();
+    
+    if (!activeTask || activeTask.taskId !== taskGuidance.taskId) {
+      // Start new task
+      const newTask: TaskState = {
+        taskId: taskGuidance.taskId,
+        taskName: `Task Sequence ${taskGuidance.totalSteps} steps`,
+        currentStep: taskGuidance.currentStep,
+        totalSteps: taskGuidance.totalSteps,
+        steps: [taskGuidance.nextStep], // We only have next step info
+        startedAt: Date.now(),
+        lastActionAt: Date.now(),
+        isActive: true
+      };
+      
+      stateManager.setActiveTask(newTask);
+      console.log('[Background] Started new task:', taskGuidance.taskId);
+    } else {
+      // Update existing task
+      stateManager.updateTaskStep(taskGuidance.currentStep);
+      console.log('[Background] Updated task step:', taskGuidance.currentStep);
+    }
+
+    // Send task guidance to content scripts
+    const tabs = await browser.tabs.query({});
+    tabs.forEach((tab: any) => {
+      if (tab.id) {
+        browser.tabs.sendMessage(tab.id, { 
+          type: 'TASK_PATH_GUIDANCE',
+          data: {
+            taskId: taskGuidance.taskId,
+            currentStep: taskGuidance.currentStep,
+            totalSteps: taskGuidance.totalSteps,
+            nextStep: taskGuidance.nextStep,
+            isTaskGuidance: true
+          }
+        }).catch(() => {
+          // Tab might not have content script, ignore
+        });
+      }
+    });
+
+  } catch (error) {
+    console.error('[Background] Error handling task guidance:', error);
+  }
+}
+
+async function handleIntelligentFocus(prediction: any): Promise<void> {
+  try {
+    // Clean up timed out tasks
+    if (stateManager.isTaskTimedOut()) {
+      stateManager.completeActiveTask();
+      console.log('[Background] Task timed out and completed');
+    }
+
+    // Send regular intelligent focus to content scripts
+    const tabs = await browser.tabs.query({});
+    tabs.forEach((tab: any) => {
+      if (tab.id) {
+        browser.tabs.sendMessage(tab.id, { 
+          type: 'INTELLIGENT_FOCUS_SUGGESTION',
+          data: {
+            suggestions: prediction.suggestions || [],
+            confidence: prediction.confidence * 100,
+            isTaskGuidance: false
+          }
+        }).catch(() => {
+          // Tab might not have content script, ignore
+        });
+      }
+    });
+
+  } catch (error) {
+    console.error('[Background] Error handling intelligent focus:', error);
   }
 }
 
