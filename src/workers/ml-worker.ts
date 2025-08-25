@@ -260,7 +260,7 @@ class SynapseMLWorker {
    */
   private selectorToIndex(selector: string): number {
     if (!this.selectorVocabulary.has(selector)) {
-      if (this.vocabularyIndex < VOCAB_SIZE - 1) {
+      if (this.vocabularyIndex < VOCAB_SIZE) {
         this.selectorVocabulary.set(selector, this.vocabularyIndex++);
       } else {
         return 0; // Use 0 as unknown token
@@ -431,6 +431,8 @@ class SynapseMLWorker {
   private async predictWithGRU(selectors: string[]): Promise<string[]> {
     if (!this.gruModel) return [];
 
+    let inputTensor: tf.Tensor | null = null;
+    let prediction: tf.Tensor | null = null;
     try {
       // Convert selectors to indices
       const indices = selectors.slice(-SEQUENCE_LENGTH).map(s => this.selectorToIndex(s));
@@ -440,8 +442,8 @@ class SynapseMLWorker {
         indices.unshift(0);
       }
 
-      const inputTensor = tf.tensor2d([indices], [1, SEQUENCE_LENGTH]);
-      const prediction = this.gruModel.predict(inputTensor) as tf.Tensor;
+      inputTensor = tf.tensor2d([indices], [1, SEQUENCE_LENGTH]);
+      prediction = this.gruModel.predict(inputTensor) as tf.Tensor;
       
       const probabilities = await prediction.data();
       
@@ -452,9 +454,6 @@ class SynapseMLWorker {
         .slice(0, 3)
         .map(item => item.idx);
 
-      inputTensor.dispose();
-      prediction.dispose();
-
       return topIndices
         .map(idx => this.indexToSelector(idx))
         .filter(selector => selector !== null) as string[];
@@ -462,6 +461,9 @@ class SynapseMLWorker {
     } catch (error) {
       console.error('[ML Worker] GRU prediction failed:', error);
       return [];
+    } finally {
+      if (inputTensor) inputTensor.dispose();
+      if (prediction) prediction.dispose();
     }
   }
 
@@ -747,7 +749,7 @@ class SynapseMLWorker {
         sequences: xData.length,
         epochs: 5,
         finalLoss: history.history.loss[history.history.loss.length - 1],
-        finalAccuracy: history.history.acc?.[history.history.acc.length - 1] || 0
+        finalAccuracy: history.history.accuracy?.[history.history.accuracy.length - 1] || 0
       };
       
     } catch (error) {
