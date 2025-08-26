@@ -28,8 +28,8 @@ export class FloatingControlCenter {
 
   constructor() {
     this.state = {
-      isVisible: false,
-      isMinimized: true,
+      isVisible: true,
+      isMinimized: false,
       position: { x: window.innerWidth - 250, y: 50 },
       isDragging: false,
       confidence: 0
@@ -72,10 +72,27 @@ export class FloatingControlCenter {
           <span>🤖</span>
           <span>Assistant</span>
         </button>
+        <button class="synapse-btn" data-action="toggle-task-guidance">
+          <span>🧭</span>
+          <span>Task Guide</span>
+        </button>
+      </div>
+      <div class="synapse-control-group">
         <button class="synapse-btn" data-action="debug-tools">
           <span>🔧</span>
           <span>Debug</span>
         </button>
+        <button class="synapse-btn" data-action="exit-task">
+          <span>✋</span>
+          <span>Exit Task</span>
+        </button>
+      </div>
+      <div class="synapse-log-panel">
+        <div class="synapse-log-header">
+          <span>System Log</span>
+          <button class="synapse-log-clear" data-action="clear-log">Clear</button>
+        </div>
+        <div class="synapse-log-content" id="synapse-log-content"></div>
       </div>
       <div class="synapse-control-group">
         <button class="synapse-btn" data-action="settings">
@@ -295,6 +312,74 @@ export class FloatingControlCenter {
         border-color: #f1aeae;
       }
 
+      .synapse-log-panel {
+        margin-top: 12px;
+        border-top: 1px solid #f1f1ef;
+        padding-top: 12px;
+      }
+
+      .synapse-log-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font-size: 12px;
+        font-weight: 600;
+        color: #787774;
+        margin-bottom: 8px;
+      }
+
+      .synapse-log-clear {
+        background: none;
+        border: none;
+        color: #e74c3c;
+        cursor: pointer;
+        font-size: 11px;
+        padding: 2px 6px;
+        border-radius: 4px;
+        transition: background 0.15s ease;
+      }
+
+      .synapse-log-clear:hover {
+        background: #fdf2f0;
+      }
+
+      .synapse-log-content {
+        background: #f9f9f9;
+        border-radius: 6px;
+        padding: 8px;
+        max-height: 120px;
+        overflow-y: auto;
+        font-size: 11px;
+        font-family: 'Monaco', 'Courier New', monospace;
+        line-height: 1.4;
+      }
+
+      .synapse-log-entry {
+        margin-bottom: 4px;
+        padding: 2px 0;
+      }
+
+      .synapse-log-entry.error {
+        color: #e74c3c;
+      }
+
+      .synapse-log-entry.success {
+        color: #00b04f;
+      }
+
+      .synapse-log-entry.info {
+        color: #2383e2;
+      }
+
+      .synapse-log-entry.warning {
+        color: #f39c12;
+      }
+
+      .synapse-log-timestamp {
+        color: #999;
+        font-size: 10px;
+      }
+
       .synapse-floating-control-center.dragging {
         transition: none;
         box-shadow: 0 8px 40px rgba(0, 0, 0, 0.15);
@@ -445,6 +530,15 @@ export class FloatingControlCenter {
       case 'settings':
         this.sendMessage('OPEN_SETTINGS');
         break;
+      case 'clear-log':
+        this.clearLog();
+        break;
+      case 'toggle-task-guidance':
+        this.sendMessage('TOGGLE_TASK_GUIDANCE');
+        break;
+      case 'exit-task':
+        this.sendMessage('EXIT_CURRENT_TASK');
+        break;
     }
   }
 
@@ -554,6 +648,12 @@ export class FloatingControlCenter {
           case 'PREDICTION_UPDATE':
             this.updateConfidence(message.data.confidence || 0);
             break;
+          case 'LOG_ENTRY':
+            this.addLogEntry(message.data.level || 'info', message.data.message || 'Unknown event');
+            break;
+          case 'TASK_GUIDANCE_STATE_CHANGED':
+            this.updateTaskGuidanceButton(message.data.enabled);
+            break;
         }
       });
     }
@@ -656,6 +756,62 @@ export class FloatingControlCenter {
         }
       }, 300);
     }, 3000);
+  }
+
+  private clearLog(): void {
+    const logContent = document.getElementById('synapse-log-content');
+    if (logContent) {
+      logContent.innerHTML = '';
+    }
+  }
+
+  private addLogEntry(level: 'info' | 'warning' | 'error' | 'success', message: string): void {
+    const logContent = document.getElementById('synapse-log-content');
+    if (!logContent) return;
+
+    const timestamp = new Date().toLocaleTimeString('en-US', { 
+      hour12: false,
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit'
+    });
+
+    const entry = document.createElement('div');
+    entry.className = `synapse-log-entry ${level}`;
+    entry.innerHTML = `
+      <span class="synapse-log-timestamp">${timestamp}</span>
+      ${message}
+    `;
+
+    logContent.appendChild(entry);
+    
+    // Auto-scroll to bottom
+    logContent.scrollTop = logContent.scrollHeight;
+    
+    // Keep only the last 50 entries to avoid memory issues
+    const entries = logContent.querySelectorAll('.synapse-log-entry');
+    if (entries.length > 50) {
+      entries[0].remove();
+    }
+  }
+
+  private updateTaskGuidanceButton(enabled: boolean): void {
+    const button = this.container.querySelector('[data-action="toggle-task-guidance"]') as HTMLElement;
+    if (button) {
+      // Remove existing status classes
+      button.classList.remove('synapse-btn-primary', 'synapse-btn-secondary');
+      
+      if (enabled) {
+        button.classList.add('synapse-btn-primary');
+      } else {
+        // Keep default style for disabled state
+      }
+      
+      const span = button.querySelector('span:last-child');
+      if (span) {
+        span.textContent = enabled ? 'Enabled' : 'Disabled';
+      }
+    }
   }
 
   public destroy(): void {
