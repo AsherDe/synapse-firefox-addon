@@ -67,13 +67,13 @@ export class UIManager {
     const ts = prediction.timestamp || Date.now();
     const isRecent = (Date.now() - ts) < 30000;
 
-    if (suggestions.length === 0) {
+    if (suggestions.length === 0 || !suggestions[0]) {
       predictionElement.innerHTML = '<div class="empty-state">No actionable suggestions available.</div>';
       return;
     }
 
     const topSuggestion = suggestions[0];
-    const confidence = topSuggestion.confidence || 0;
+    const confidence = topSuggestion?.confidence || 0;
     
     predictionElement.innerHTML = `
       <div class="prediction-item ${isRecent ? 'recent' : 'stale'}">
@@ -82,7 +82,7 @@ export class UIManager {
           <span class="prediction-time">${this.formatTime(ts)}</span>
         </div>
         <div class="prediction-details">
-          <div class="suggestion-title">${topSuggestion.title || 'Next action'}</div>
+          <div class="suggestion-title">${topSuggestion?.title || 'Next action'}</div>
           <div class="confidence">Confidence: <span class="confidence-bar" style="width: ${confidence * 100}%">${(confidence * 100).toFixed(1)}%</span></div>
           ${suggestions.length > 1 ? `<div class="suggestion-count">+${suggestions.length - 1} more suggestions</div>` : ''}
         </div>

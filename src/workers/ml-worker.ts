@@ -127,10 +127,14 @@ class SynapseMLWorker {
             units: HIDDEN_SIZE,
             returnSequences: true,
             dropout: 0.2,
+            kernelInitializer: 'glorotNormal',
+            recurrentInitializer: 'glorotNormal',
           }),
           tf.layers.gru({
             units: HIDDEN_SIZE,
             dropout: 0.2,
+            kernelInitializer: 'glorotNormal',
+            recurrentInitializer: 'glorotNormal',
           }),
           tf.layers.dense({
             units: INITIAL_VOCAB_SIZE,
