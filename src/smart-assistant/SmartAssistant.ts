@@ -1,4 +1,6 @@
 import { SynapseEvent } from '../shared/types';
+
+declare var browser: any;
 import { 
   AssistantState, 
   OperationSuggestion, 
@@ -70,7 +72,7 @@ export class SmartAssistant {
     
     this.messagingService.onMessage('intelligentFocusSuggestion', (message) => {
       if (this.state.isEnabled && message.data?.suggestions?.length > 0) {
-        this.renderIntelligentFocus(message.data.suggestions);
+        this.showIntelligentFocus(message.data.suggestions);
       }
     });
     
@@ -482,7 +484,7 @@ export class SmartAssistant {
       const action = suggestion.actions[0];
       return {
         selector: action?.target || '',
-        type: 'intelligent_focus',
+        type: 'intelligent_focus' as const,
         keyNumber: index + 1,
         confidence: suggestion.confidence,
         action: action,
