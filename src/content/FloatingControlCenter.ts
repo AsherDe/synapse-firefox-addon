@@ -28,7 +28,7 @@ export class FloatingControlCenter {
 
   constructor() {
     this.state = {
-      isVisible: true,
+      isVisible: true,  // Ensure visible by default
       isMinimized: false,
       position: { x: window.innerWidth - 250, y: 50 },
       isDragging: false,
@@ -39,6 +39,7 @@ export class FloatingControlCenter {
     this.loadState();
     this.attachEventListeners();
     this.setupMessageListener();
+    this.ensureVisible();
   }
 
   private initializeDOM(): void {
@@ -58,16 +59,6 @@ export class FloatingControlCenter {
     this.contentPanel.className = 'synapse-content-panel';
     this.contentPanel.innerHTML = `
       <div class="synapse-control-group">
-        <button class="synapse-btn" data-action="toggle-monitoring">
-          <span>📊</span>
-          <span>Monitoring</span>
-        </button>
-        <button class="synapse-btn" data-action="export-data">
-          <span>📤</span>
-          <span>Export</span>
-        </button>
-      </div>
-      <div class="synapse-control-group">
         <button class="synapse-btn" data-action="smart-assistant">
           <span>🤖</span>
           <span>Assistant</span>
@@ -78,26 +69,9 @@ export class FloatingControlCenter {
         </button>
       </div>
       <div class="synapse-control-group">
-        <button class="synapse-btn" data-action="debug-tools">
-          <span>🔧</span>
-          <span>Debug</span>
-        </button>
         <button class="synapse-btn" data-action="exit-task">
           <span>✋</span>
           <span>Exit Task</span>
-        </button>
-      </div>
-      <div class="synapse-log-panel">
-        <div class="synapse-log-header">
-          <span>System Log</span>
-          <button class="synapse-log-clear" data-action="clear-log">Clear</button>
-        </div>
-        <div class="synapse-log-content" id="synapse-log-content"></div>
-      </div>
-      <div class="synapse-control-group">
-        <button class="synapse-btn" data-action="settings">
-          <span>⚙️</span>
-          <span>Settings</span>
         </button>
         <button class="synapse-btn synapse-btn-close" data-action="hide">
           <span>✕</span>
@@ -112,7 +86,10 @@ export class FloatingControlCenter {
     // Inject styles
     this.injectStyles();
     
-    // Initially hidden
+    // Ensure DOM is ready and add to page
+    this.addToPage();
+    
+    // Update visibility based on state
     this.updateVisibility();
   }
 
@@ -125,53 +102,55 @@ export class FloatingControlCenter {
     style.textContent = `
       .synapse-floating-control-center {
         position: fixed;
-        background: #ffffff;
-        border-radius: 12px;
-        border: 1px solid #e9e9e7;
-        box-shadow: 0 4px 24px rgba(0, 0, 0, 0.1);
+        background: rgba(255, 255, 255, 0.85);
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
+        border-radius: 16px;
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
         z-index: 2147483647;
         font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
         color: #37352f;
         user-select: none;
         transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-        max-width: 280px;
-        min-width: 240px;
+        max-width: 200px;
+        min-width: 160px;
       }
 
       .synapse-drag-handle {
-        padding: 16px 20px 12px;
+        padding: 12px 16px 10px;
         cursor: move;
         display: flex;
         align-items: center;
-        gap: 12px;
-        background: #ffffff;
-        border-radius: 12px 12px 0 0;
-        border-bottom: 1px solid #f1f1ef;
+        gap: 8px;
+        background: rgba(255, 255, 255, 0.3);
+        border-radius: 16px 16px 0 0;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.2);
       }
 
       .synapse-handle-icon {
-        font-size: 18px;
+        font-size: 16px;
         filter: none;
       }
 
       .synapse-handle-title {
-        font-weight: 700;
+        font-weight: 600;
         color: #2d2d2d;
-        font-size: 16px;
-        letter-spacing: -0.3px;
+        font-size: 14px;
+        letter-spacing: -0.2px;
       }
 
       .synapse-confidence-display {
         flex: 1;
         text-align: center;
         font-weight: 600;
-        font-size: 13px;
-        background: #e6f3ff;
+        font-size: 11px;
+        background: rgba(35, 131, 226, 0.2);
         color: #2383e2;
-        border-radius: 20px;
-        padding: 4px 12px;
-        margin: 0 8px;
-        min-width: 45px;
+        border-radius: 12px;
+        padding: 3px 8px;
+        margin: 0 4px;
+        min-width: 35px;
         transition: all 0.15s ease;
       }
 
@@ -191,8 +170,8 @@ export class FloatingControlCenter {
       }
 
       .synapse-toggle-btn {
-        width: 28px;
-        height: 28px;
+        width: 24px;
+        height: 24px;
         border-radius: 6px;
         display: flex;
         align-items: center;
@@ -200,25 +179,25 @@ export class FloatingControlCenter {
         cursor: pointer;
         color: #787774;
         font-weight: 600;
-        font-size: 16px;
+        font-size: 14px;
         transition: all 0.15s ease;
-        background: #f7f7f5;
-        border: 1px solid #e9e9e7;
+        background: rgba(247, 247, 245, 0.6);
+        border: 1px solid rgba(233, 233, 231, 0.5);
       }
 
       .synapse-toggle-btn:hover {
-        background: #f1f1ef;
-        border-color: #d3d3d1;
+        background: rgba(241, 241, 239, 0.8);
+        border-color: rgba(211, 211, 209, 0.7);
         color: #37352f;
       }
 
       .synapse-content-panel {
-        padding: 16px 20px 20px;
+        padding: 12px 16px 16px;
         display: flex;
         flex-direction: column;
-        gap: 12px;
-        background: #ffffff;
-        border-radius: 0 0 12px 12px;
+        gap: 8px;
+        background: rgba(255, 255, 255, 0.2);
+        border-radius: 0 0 16px 16px;
       }
 
       .synapse-content-panel.minimized {
@@ -227,36 +206,37 @@ export class FloatingControlCenter {
 
       .synapse-control-group {
         display: flex;
-        gap: 8px;
+        gap: 6px;
       }
 
       .synapse-btn {
         flex: 1;
-        padding: 12px 8px;
-        border: 1px solid #e9e9e7;
-        border-radius: 8px;
-        background: #ffffff;
+        padding: 10px 6px;
+        border: 1px solid rgba(233, 233, 231, 0.4);
+        border-radius: 10px;
+        background: rgba(255, 255, 255, 0.6);
         color: #37352f;
         cursor: pointer;
         display: flex;
         flex-direction: column;
         align-items: center;
-        gap: 6px;
-        font-size: 12px;
+        gap: 4px;
+        font-size: 10px;
         font-weight: 500;
         transition: all 0.15s ease;
-        line-height: 1.2;
+        line-height: 1.1;
+        backdrop-filter: blur(10px);
       }
 
       .synapse-btn:hover {
-        background: #f7f7f5;
-        border-color: #d3d3d1;
+        background: rgba(255, 255, 255, 0.8);
+        border-color: rgba(211, 211, 209, 0.6);
         transform: translateY(-1px);
-        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
       }
 
       .synapse-btn span:first-child {
-        font-size: 16px;
+        font-size: 14px;
         line-height: 1;
       }
 
@@ -269,116 +249,49 @@ export class FloatingControlCenter {
       }
 
       .synapse-btn-primary {
-        background: #2383e2;
+        background: rgba(35, 131, 226, 0.8);
         color: white;
-        border-color: #2383e2;
+        border-color: rgba(35, 131, 226, 0.6);
       }
 
       .synapse-btn-primary:hover {
-        background: #1e73cc;
-        border-color: #1e73cc;
+        background: rgba(30, 115, 204, 0.9);
+        border-color: rgba(30, 115, 204, 0.7);
       }
 
       .synapse-btn-success {
-        background: #f0f9f0;
+        background: rgba(240, 249, 240, 0.8);
         color: #00b04f;
-        border-color: #d4e6d4;
+        border-color: rgba(212, 230, 212, 0.6);
       }
 
       .synapse-btn-success:hover {
-        background: #e8f5e8;
-        border-color: #c1d9c1;
+        background: rgba(232, 245, 232, 0.9);
+        border-color: rgba(193, 217, 193, 0.7);
       }
 
       .synapse-btn-warning {
-        background: #fef8e7;
+        background: rgba(254, 248, 231, 0.8);
         color: #f39c12;
-        border-color: #f4e4a6;
+        border-color: rgba(244, 228, 166, 0.6);
       }
 
       .synapse-btn-warning:hover {
-        background: #fdf2d4;
-        border-color: #f0d98e;
+        background: rgba(253, 242, 212, 0.9);
+        border-color: rgba(240, 217, 142, 0.7);
       }
 
       .synapse-btn-close {
-        background: #fdf2f0;
+        background: rgba(253, 242, 240, 0.8);
         color: #e74c3c;
-        border-color: #f4c4c4;
+        border-color: rgba(244, 196, 196, 0.6);
       }
 
       .synapse-btn-close:hover {
-        background: #fce8e6;
-        border-color: #f1aeae;
+        background: rgba(252, 232, 230, 0.9);
+        border-color: rgba(241, 174, 174, 0.7);
       }
 
-      .synapse-log-panel {
-        margin-top: 12px;
-        border-top: 1px solid #f1f1ef;
-        padding-top: 12px;
-      }
-
-      .synapse-log-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        font-size: 12px;
-        font-weight: 600;
-        color: #787774;
-        margin-bottom: 8px;
-      }
-
-      .synapse-log-clear {
-        background: none;
-        border: none;
-        color: #e74c3c;
-        cursor: pointer;
-        font-size: 11px;
-        padding: 2px 6px;
-        border-radius: 4px;
-        transition: background 0.15s ease;
-      }
-
-      .synapse-log-clear:hover {
-        background: #fdf2f0;
-      }
-
-      .synapse-log-content {
-        background: #f9f9f9;
-        border-radius: 6px;
-        padding: 8px;
-        max-height: 120px;
-        overflow-y: auto;
-        font-size: 11px;
-        font-family: 'Monaco', 'Courier New', monospace;
-        line-height: 1.4;
-      }
-
-      .synapse-log-entry {
-        margin-bottom: 4px;
-        padding: 2px 0;
-      }
-
-      .synapse-log-entry.error {
-        color: #e74c3c;
-      }
-
-      .synapse-log-entry.success {
-        color: #00b04f;
-      }
-
-      .synapse-log-entry.info {
-        color: #2383e2;
-      }
-
-      .synapse-log-entry.warning {
-        color: #f39c12;
-      }
-
-      .synapse-log-timestamp {
-        color: #999;
-        font-size: 10px;
-      }
 
       .synapse-floating-control-center.dragging {
         transition: none;
@@ -515,23 +428,8 @@ export class FloatingControlCenter {
       case 'hide':
         this.hide();
         break;
-      case 'toggle-monitoring':
-        this.sendMessage('TOGGLE_MONITORING');
-        break;
-      case 'export-data':
-        this.sendMessage('EXPORT_DATA');
-        break;
       case 'smart-assistant':
         this.sendMessage('TOGGLE_SMART_ASSISTANT');
-        break;
-      case 'debug-tools':
-        this.sendMessage('OPEN_DEBUG_TOOLS');
-        break;
-      case 'settings':
-        this.sendMessage('OPEN_SETTINGS');
-        break;
-      case 'clear-log':
-        this.clearLog();
         break;
       case 'toggle-task-guidance':
         this.sendMessage('TOGGLE_TASK_GUIDANCE');
@@ -565,6 +463,34 @@ export class FloatingControlCenter {
     this.container.style.top = `${this.state.position.y}px`;
   }
 
+  private addToPage(): void {
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', () => {
+        this.appendToBody();
+      });
+    } else {
+      this.appendToBody();
+    }
+  }
+
+  private appendToBody(): void {
+    if (document.body && !document.body.contains(this.container)) {
+      document.body.appendChild(this.container);
+      this.updatePosition();
+    }
+  }
+
+  private ensureVisible(): void {
+    // Force visibility on startup
+    if (this.state.isVisible) {
+      // Small delay to ensure DOM is ready
+      setTimeout(() => {
+        this.appendToBody();
+        this.updateVisibility();
+      }, 100);
+    }
+  }
+
   private updateVisibility(): void {
     this.container.classList.toggle('hidden', !this.state.isVisible);
     this.contentPanel.classList.toggle('minimized', this.state.isMinimized);
@@ -582,15 +508,11 @@ export class FloatingControlCenter {
   }
 
   public show(): void {
-    if (!this.state.isVisible) {
-      this.state.isVisible = true;
-      if (!document.body.contains(this.container)) {
-        document.body.appendChild(this.container);
-      }
-      this.updatePosition();
-      this.updateVisibility();
-      this.saveState();
-    }
+    this.state.isVisible = true;
+    this.appendToBody();
+    this.updatePosition();
+    this.updateVisibility();
+    this.saveState();
   }
 
   public hide(): void {
@@ -636,20 +558,11 @@ export class FloatingControlCenter {
     if (typeof browser !== 'undefined' && browser.runtime) {
       browser.runtime.onMessage.addListener((message: any) => {
         switch (message.type) {
-          case 'MONITORING_STATE_CHANGED':
-            this.updateMonitoringButton(message.data.monitoring);
-            break;
           case 'ASSISTANT_STATE_CHANGED':
             this.updateAssistantButton(message.data.enabled);
             break;
-          case 'SHOW_NOTIFICATION':
-            this.showNotification(message.data.message, message.data.type);
-            break;
           case 'PREDICTION_UPDATE':
             this.updateConfidence(message.data.confidence || 0);
-            break;
-          case 'LOG_ENTRY':
-            this.addLogEntry(message.data.level || 'info', message.data.message || 'Unknown event');
             break;
           case 'TASK_GUIDANCE_STATE_CHANGED':
             this.updateTaskGuidanceButton(message.data.enabled);
@@ -659,24 +572,6 @@ export class FloatingControlCenter {
     }
   }
 
-  private updateMonitoringButton(monitoring: boolean): void {
-    const button = this.container.querySelector('[data-action="toggle-monitoring"]') as HTMLElement;
-    if (button) {
-      // Remove existing status classes
-      button.classList.remove('synapse-btn-success', 'synapse-btn-warning', 'synapse-status-active', 'synapse-status-paused');
-      
-      if (monitoring) {
-        button.classList.add('synapse-btn-success', 'synapse-status-active');
-      } else {
-        button.classList.add('synapse-btn-warning', 'synapse-status-paused');
-      }
-      
-      const span = button.querySelector('span:last-child');
-      if (span) {
-        span.textContent = monitoring ? 'Active' : 'Paused';
-      }
-    }
-  }
 
   private updateAssistantButton(enabled: boolean): void {
     const button = this.container.querySelector('[data-action="smart-assistant"]') as HTMLElement;
@@ -720,80 +615,6 @@ export class FloatingControlCenter {
     this.saveState();
   }
 
-  private showNotification(message: string, type: 'success' | 'error' | 'info' = 'info'): void {
-    // Create temporary notification
-    const notification = document.createElement('div');
-    notification.textContent = message;
-    notification.style.cssText = `
-      position: fixed;
-      top: 20px;
-      right: 20px;
-      background: ${type === 'success' ? '#4CAF50' : type === 'error' ? '#f44336' : '#2196F3'};
-      color: white;
-      padding: 12px 16px;
-      border-radius: 8px;
-      z-index: 2147483648;
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-      font-size: 14px;
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-      transform: translateX(100%);
-      transition: transform 0.3s ease;
-    `;
-
-    document.body.appendChild(notification);
-
-    // Animate in
-    requestAnimationFrame(() => {
-      notification.style.transform = 'translateX(0)';
-    });
-
-    // Remove after 3 seconds
-    setTimeout(() => {
-      notification.style.transform = 'translateX(100%)';
-      setTimeout(() => {
-        if (notification.parentNode) {
-          notification.parentNode.removeChild(notification);
-        }
-      }, 300);
-    }, 3000);
-  }
-
-  private clearLog(): void {
-    const logContent = document.getElementById('synapse-log-content');
-    if (logContent) {
-      logContent.innerHTML = '';
-    }
-  }
-
-  private addLogEntry(level: 'info' | 'warning' | 'error' | 'success', message: string): void {
-    const logContent = document.getElementById('synapse-log-content');
-    if (!logContent) return;
-
-    const timestamp = new Date().toLocaleTimeString('en-US', { 
-      hour12: false,
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit'
-    });
-
-    const entry = document.createElement('div');
-    entry.className = `synapse-log-entry ${level}`;
-    entry.innerHTML = `
-      <span class="synapse-log-timestamp">${timestamp}</span>
-      ${message}
-    `;
-
-    logContent.appendChild(entry);
-    
-    // Auto-scroll to bottom
-    logContent.scrollTop = logContent.scrollHeight;
-    
-    // Keep only the last 50 entries to avoid memory issues
-    const entries = logContent.querySelectorAll('.synapse-log-entry');
-    if (entries.length > 50) {
-      entries[0].remove();
-    }
-  }
 
   private updateTaskGuidanceButton(enabled: boolean): void {
     const button = this.container.querySelector('[data-action="toggle-task-guidance"]') as HTMLElement;

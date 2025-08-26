@@ -58,6 +58,24 @@ async function initializeServices(): Promise<void> {
     // MLService放在最后创建，确保状态监听器已经设置好
     mlService = new MLService(stateManager, dataStorage);
     
+    // Initialize floating control center on all tabs
+    setTimeout(async () => {
+      try {
+        const tabs = await browser.tabs.query({});
+        tabs.forEach((tab: any) => {
+          if (tab.id) {
+            browser.tabs.sendMessage(tab.id, { 
+              type: 'SHOW_FLOATING_CONTROL' 
+            }).catch(() => {
+              // Tab might not have content script, ignore
+            });
+          }
+        });
+      } catch (error) {
+        console.warn('[Background] Failed to show floating control centers:', error);
+      }
+    }, 2000);
+    
     console.log('[SYNAPSE BACKGROUND] ===== SERVICES INITIALIZED SUCCESSFULLY =====');
     
   } catch (error) {
@@ -123,6 +141,8 @@ function setupMessageHandlers(): void {
     'FLOATING_CONTROL_TOGGLE_SMART_ASSISTANT': handleFloatingControlToggleSmartAssistant,
     'FLOATING_CONTROL_OPEN_DEBUG_TOOLS': handleFloatingControlOpenDebugTools,
     'FLOATING_CONTROL_OPEN_SETTINGS': handleFloatingControlOpenSettings,
+    'FLOATING_CONTROL_TOGGLE_TASK_GUIDANCE': handleFloatingControlToggleTaskGuidance,
+    'FLOATING_CONTROL_EXIT_CURRENT_TASK': handleFloatingControlExitCurrentTask,
   });
 }
 
@@ -279,7 +299,7 @@ async function handleSynapseEvent(message: any, _sender: any): Promise<void> {
 
 // Task guidance handling
 async function handleTaskGuidance(
-  currentEvent: SynapseEvent, 
+  _currentEvent: SynapseEvent, 
   taskGuidance: {
     taskId: string;
     currentStep: number;
@@ -728,6 +748,62 @@ async function handleFloatingControlOpenSettings(): Promise<any> {
     await browser.tabs.create({ url: optionsUrl });
     
     return { success: true };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    return { success: false, error: errorMessage };
+  }
+}
+
+async function handleFloatingControlToggleTaskGuidance(): Promise<any> {
+  try {
+    const currentState = stateManager.get('taskGuidanceEnabled') !== false;
+    const newState = !currentState;
+    
+    stateManager.set('taskGuidanceEnabled', newState);
+    stateManager.markAsPersistent('taskGuidanceEnabled');
+    
+    // Send to all content scripts
+    const tabs = await browser.tabs.query({});
+    tabs.forEach((tab: any) => {
+      if (tab.id) {
+        browser.tabs.sendMessage(tab.id, { 
+          type: 'TASK_GUIDANCE_STATE_CHANGED', 
+          data: { enabled: newState } 
+        }).catch(() => {
+          // Tab might not have content script, ignore
+        });
+      }
+    });
+    
+    return { success: true, enabled: newState };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    return { success: false, error: errorMessage };
+  }
+}
+
+async function handleFloatingControlExitCurrentTask(): Promise<any> {
+  try {
+    // Complete active task if any
+    const activeTask = stateManager.getActiveTask();
+    if (activeTask) {
+      stateManager.completeActiveTask();
+      
+      // Notify all content scripts to clear task guidance
+      const tabs = await browser.tabs.query({});
+      tabs.forEach((tab: any) => {
+        if (tab.id) {
+          browser.tabs.sendMessage(tab.id, { 
+            type: 'TASK_EXITED',
+            data: { taskId: activeTask.taskId }
+          }).catch(() => {
+            // Tab might not have content script, ignore
+          });
+        }
+      });
+    }
+    
+    return { success: true, taskExited: !!activeTask };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     return { success: false, error: errorMessage };

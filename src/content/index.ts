@@ -118,29 +118,41 @@ setupSmartAssistantBridge();
 let floatingControlCenter: FloatingControlCenter | null = null;
 
 function initializeFloatingControlCenter(): void {
+  // Prevent multiple initialization
+  if (floatingControlCenter) return;
+  
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', () => {
-      floatingControlCenter = new FloatingControlCenter();
-      // Show by default for easy access
-      setTimeout(() => {
-        if (floatingControlCenter) {
-          floatingControlCenter.show();
-        }
-      }, 1000);
+      if (!floatingControlCenter) {
+        floatingControlCenter = new FloatingControlCenter();
+        // Show immediately after DOM is ready
+        floatingControlCenter.show();
+      }
     });
   } else {
     floatingControlCenter = new FloatingControlCenter();
-    // Show by default for easy access
-    setTimeout(() => {
-      if (floatingControlCenter) {
-        floatingControlCenter.show();
-      }
-    }, 1000);
+    // Show immediately since DOM is ready
+    floatingControlCenter.show();
   }
 }
 
 // Listen for messages from background script
-browser.runtime.onMessage.addListener((message: any) => {
+if (typeof browser !== 'undefined' && browser.runtime) {
+  browser.runtime.onMessage.addListener((message: any) => {
+    if (!floatingControlCenter) {
+      // Initialize if not already done
+      initializeFloatingControlCenter();
+      // Give it a moment to initialize
+      setTimeout(() => {
+        handleFloatingControlMessage(message);
+      }, 100);
+    } else {
+      handleFloatingControlMessage(message);
+    }
+  });
+}
+
+function handleFloatingControlMessage(message: any): void {
   if (!floatingControlCenter) return;
   
   switch (message.type) {
@@ -154,7 +166,7 @@ browser.runtime.onMessage.addListener((message: any) => {
       floatingControlCenter.toggle();
       break;
   }
-});
+}
 
 // Initialize floating control center
 initializeFloatingControlCenter();
