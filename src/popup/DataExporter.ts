@@ -217,8 +217,8 @@ export class DataExporter {
       avgSuggestionsPerPrediction: (totalSuggestions / this.predictionHistory.length).toFixed(2),
       failureReasons: reasonCounts,
       suggestionDistribution: {
-        min: Math.min(...suggestionCounts),
-        max: Math.max(...suggestionCounts),
+        min: suggestionCounts.length > 0 ? Math.min(...suggestionCounts) : 0,
+        max: suggestionCounts.length > 0 ? Math.max(...suggestionCounts) : 0,
         avg: (totalSuggestions / this.predictionHistory.length).toFixed(2)
       }
     };
