@@ -1,4 +1,6 @@
 import { SynapseEvent } from '../shared/types';
+
+declare var browser: any;
 import { 
   AssistantState, 
   OperationSuggestion, 
@@ -9,6 +11,7 @@ import { MessagingService } from './MessagingService';
 import { StyleInjector } from './StyleInjector';
 import { ExecutionEngine } from './ExecutionEngine';
 import { FeedbackCollector } from './FeedbackCollector';
+import { UnifiedHighlightSystem, HighlightTarget } from './UnifiedHighlightSystem';
 
 /**
  * SmartAssistant - Main controller for smart assistant functionality
@@ -19,6 +22,7 @@ export class SmartAssistant {
   private styleInjector: StyleInjector;
   private executionEngine: ExecutionEngine;
   private feedbackCollector: FeedbackCollector;
+  private highlightSystem: UnifiedHighlightSystem;
   
   // UI elements
   private assistantElement: HTMLElement | null = null;
@@ -41,6 +45,7 @@ export class SmartAssistant {
     this.styleInjector = new StyleInjector();
     this.executionEngine = new ExecutionEngine(this.messagingService);
     this.feedbackCollector = new FeedbackCollector(this.messagingService);
+    this.highlightSystem = new UnifiedHighlightSystem();
     
     this.initialize();
   }
@@ -67,21 +72,21 @@ export class SmartAssistant {
     
     this.messagingService.onMessage('intelligentFocusSuggestion', (message) => {
       if (this.state.isEnabled && message.data?.suggestions?.length > 0) {
-        this.renderIntelligentFocus(message.data.suggestions);
+        this.showIntelligentFocus(message.data.suggestions);
       }
     });
     
     // Handle TASK_PATH_GUIDANCE messages from background
     this.messagingService.onMessage('TASK_PATH_GUIDANCE', (message) => {
       if (this.state.isEnabled && message.data?.isTaskGuidance) {
-        this.renderTaskPathGuidance(message.data);
+        this.showTaskGuidance(message.data);
       }
     });
     
     // Handle INTELLIGENT_FOCUS_SUGGESTION messages from background  
     this.messagingService.onMessage('INTELLIGENT_FOCUS_SUGGESTION', (message) => {
       if (this.state.isEnabled && message.data?.suggestions?.length > 0 && !message.data?.isTaskGuidance) {
-        this.renderIntelligentFocus(message.data.suggestions);
+        this.showIntelligentFocus(message.data.suggestions);
       }
     });
   }
@@ -105,6 +110,7 @@ export class SmartAssistant {
     
     if (!this.state.isEnabled) {
       this.hideAssistant();
+      this.highlightSystem.clearHighlights();
     }
     
     this.messagingService.sendToContentScript({
@@ -471,312 +477,81 @@ export class SmartAssistant {
   }
 
   /**
-   * Render intelligent focus suggestions as numbered overlays
+   * Show intelligent focus suggestions using unified highlight system
    */
-  private renderIntelligentFocus(suggestions: OperationSuggestion[]): void {
-    // Clear any existing focus overlays
-    this.clearIntelligentFocus();
-    
-    suggestions.slice(0, 9).forEach((suggestion, index) => {
-      const keyNumber = index + 1;
+  private showIntelligentFocus(suggestions: OperationSuggestion[]): void {
+    const targets: HighlightTarget[] = suggestions.slice(0, 9).map((suggestion, index) => {
       const action = suggestion.actions[0];
-      
-      if (!action?.target) return;
-      
-      const targetElement = document.querySelector(action.target) as HTMLElement;
-      if (!targetElement) return;
-      
-      // Create focus overlay
-      const overlay = document.createElement('div');
-      overlay.className = 'synapse-intelligent-focus-overlay';
-      overlay.id = `synapse-focus-${keyNumber}`;
-      overlay.textContent = keyNumber.toString();
-      
-      const rect = targetElement.getBoundingClientRect();
-      overlay.style.position = 'fixed';
-      overlay.style.top = `${rect.top - 15}px`;
-      overlay.style.left = `${rect.right - 15}px`;
-      overlay.style.width = '24px';
-      overlay.style.height = '24px';
-      overlay.style.backgroundColor = '#4CAF50';
-      overlay.style.color = 'white';
-      overlay.style.borderRadius = '50%';
-      overlay.style.display = 'flex';
-      overlay.style.alignItems = 'center';
-      overlay.style.justifyContent = 'center';
-      overlay.style.fontSize = '14px';
-      overlay.style.fontWeight = 'bold';
-      overlay.style.zIndex = '9999';
-      overlay.style.cursor = 'pointer';
-      overlay.style.border = '2px solid #45a049';
-      overlay.style.boxShadow = '0 2px 8px rgba(0,0,0,0.3)';
-      
-      // Add click handler
-      overlay.addEventListener('click', () => {
-        this.executeIntelligentFocusAction(suggestion, action);
-      });
-      
-      document.body.appendChild(overlay);
-    });
+      return {
+        selector: action?.target || '',
+        type: 'intelligent_focus' as const,
+        keyNumber: index + 1,
+        confidence: suggestion.confidence,
+        action: action,
+        suggestion: suggestion
+      };
+    }).filter(target => target.selector);
     
-    // Set up keyboard listener for number keys
-    this.setupIntelligentFocusKeyListener(suggestions);
-    
-    // Auto-clear after 30 seconds
-    setTimeout(() => this.clearIntelligentFocus(), 30000);
-  }
-  
-  /**
-   * Clear intelligent focus overlays
-   */
-  private clearIntelligentFocus(): void {
-    const overlays = document.querySelectorAll('.synapse-intelligent-focus-overlay');
-    overlays.forEach(overlay => overlay.remove());
-    this.removeIntelligentFocusKeyListener();
-  }
-  
-  /**
-   * Setup keyboard listener for intelligent focus
-   */
-  private setupIntelligentFocusKeyListener(suggestions: OperationSuggestion[]): void {
-    this.intelligentFocusKeyHandler = (event: KeyboardEvent) => {
-      const key = event.key;
-      if (/^[1-9]$/.test(key)) {
-        const index = parseInt(key) - 1;
-        if (index < suggestions.length) {
-          const suggestion = suggestions[index];
-          const action = suggestion.actions[0];
-          if (action) {
-            event.preventDefault();
-            this.executeIntelligentFocusAction(suggestion, action);
-          }
-        }
-      } else if (key === 'Escape') {
-        event.preventDefault();
-        this.clearIntelligentFocus();
-      }
-    };
-    
-    document.addEventListener('keydown', this.intelligentFocusKeyHandler, true);
-  }
-  
-  private intelligentFocusKeyHandler: ((event: KeyboardEvent) => void) | null = null;
-  
-  /**
-   * Remove keyboard listener for intelligent focus
-   */
-  private removeIntelligentFocusKeyListener(): void {
-    if (this.intelligentFocusKeyHandler) {
-      document.removeEventListener('keydown', this.intelligentFocusKeyHandler, true);
-      this.intelligentFocusKeyHandler = null;
+    if (targets.length > 0) {
+      this.highlightSystem.showIntelligentFocus(targets);
+      this.logMessage('info', `Intelligent focus: ${targets.length} suggestions`);
     }
   }
   
   /**
-   * Execute an intelligent focus action
+   * Send log message to FloatingControlCenter
    */
-  private async executeIntelligentFocusAction(suggestion: OperationSuggestion, action: any): Promise<void> {
-    try {
-      const targetElement = document.querySelector(action.target) as HTMLElement;
-      if (!targetElement) return;
-      
-      // Clear overlays first
-      this.clearIntelligentFocus();
-      
-      // Execute the action based on type
-      switch (action.type) {
-        case 'click':
-          targetElement.click();
-          break;
-        case 'text_input':
-          if (action.value && targetElement instanceof HTMLInputElement) {
-            targetElement.focus();
-            targetElement.value = action.value;
-            targetElement.dispatchEvent(new Event('input', { bubbles: true }));
-          }
-          break;
-        case 'scroll':
-          targetElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          break;
-        default:
-          targetElement.click();
-          break;
-      }
-      
-      // Send feedback to background
-      await this.feedbackCollector.recordHintInteraction(suggestion.id, true);
-      
-    } catch (error) {
-      console.error('[SmartAssistant] Failed to execute intelligent focus action:', error);
+  private logMessage(level: 'info' | 'warning' | 'error' | 'success', message: string): void {
+    if (typeof browser !== 'undefined' && browser.runtime) {
+      browser.runtime.sendMessage({
+        type: 'LOG_ENTRY',
+        data: { level, message }
+      });
     }
   }
 
   /**
-   * Render task path guidance as highlighted overlay with progress indicator
+   * Show task path guidance using unified highlight system
    */
-  private renderTaskPathGuidance(guidanceData: any): void {
-    // Clear any existing overlays first
-    this.clearIntelligentFocus();
-    
+  private showTaskGuidance(guidanceData: any): void {
     const { taskId, currentStep, totalSteps, nextStep } = guidanceData;
     
-    if (!nextStep?.selector) return;
-    
-    const targetElement = document.querySelector(nextStep.selector) as HTMLElement;
-    if (!targetElement) return;
-    
-    // Create task guidance overlay
-    const overlay = document.createElement('div');
-    overlay.className = 'synapse-task-guidance-overlay';
-    overlay.id = `synapse-task-guidance`;
-    
-    // Create progress indicator
-    const progressText = `Step ${currentStep + 2}/${totalSteps}`;
-    const progressPercent = ((currentStep + 1) / totalSteps) * 100;
-    
-    overlay.innerHTML = `
-      <div class="task-guidance-content">
-        <div class="task-progress">
-          <div class="progress-bar">
-            <div class="progress-fill" style="width: ${progressPercent}%"></div>
-          </div>
-          <span class="progress-text">${progressText}</span>
-        </div>
-        <div class="next-action">
-          <span class="action-label">Next:</span>
-          <span class="action-description">${nextStep.action}</span>
-        </div>
-      </div>
-    `;
-    
-    const rect = targetElement.getBoundingClientRect();
-    overlay.style.position = 'fixed';
-    overlay.style.top = `${rect.top - 60}px`;
-    overlay.style.left = `${rect.left}px`;
-    overlay.style.minWidth = '200px';
-    overlay.style.backgroundColor = '#FF6B35';
-    overlay.style.color = 'white';
-    overlay.style.padding = '8px 12px';
-    overlay.style.borderRadius = '8px';
-    overlay.style.fontSize = '12px';
-    overlay.style.fontWeight = '500';
-    overlay.style.zIndex = '10000';
-    overlay.style.boxShadow = '0 4px 12px rgba(255, 107, 53, 0.4)';
-    overlay.style.animation = 'pulse 2s infinite';
-    
-    // Add target element highlight
-    const highlightOverlay = document.createElement('div');
-    highlightOverlay.className = 'synapse-task-target-highlight';
-    highlightOverlay.style.position = 'fixed';
-    highlightOverlay.style.top = `${rect.top - 4}px`;
-    highlightOverlay.style.left = `${rect.left - 4}px`;
-    highlightOverlay.style.width = `${rect.width + 8}px`;
-    highlightOverlay.style.height = `${rect.height + 8}px`;
-    highlightOverlay.style.border = '3px solid #FF6B35';
-    highlightOverlay.style.borderRadius = '4px';
-    highlightOverlay.style.backgroundColor = 'rgba(255, 107, 53, 0.1)';
-    highlightOverlay.style.zIndex = '9999';
-    highlightOverlay.style.pointerEvents = 'none';
-    highlightOverlay.style.animation = 'pulse 2s infinite';
-    
-    // Add click handler to execute the task step
-    overlay.addEventListener('click', () => {
-      this.executeTaskStep(nextStep, taskId);
-    });
-    
-    targetElement.addEventListener('click', () => {
-      this.executeTaskStep(nextStep, taskId);
-    }, { once: true });
-    
-    document.body.appendChild(highlightOverlay);
-    document.body.appendChild(overlay);
-    
-    // Set up ESC to clear guidance
-    this.setupTaskGuidanceKeyListener();
-    
-    // Auto-clear after 60 seconds (tasks should be longer-lived than regular suggestions)
-    setTimeout(() => this.clearTaskGuidance(), 60000);
-  }
-  
-  /**
-   * Execute a task step action
-   */
-  private async executeTaskStep(step: any, taskId: string): Promise<void> {
-    try {
-      const targetElement = document.querySelector(step.selector) as HTMLElement;
-      if (!targetElement) return;
-      
-      // Clear guidance overlays
-      this.clearTaskGuidance();
-      
-      // Execute the action based on type
-      switch (step.action) {
-        case 'click':
-          targetElement.click();
-          break;
-        case 'text_input':
-          if (step.value && targetElement instanceof HTMLInputElement) {
-            targetElement.focus();
-            targetElement.value = step.value;
-            targetElement.dispatchEvent(new Event('input', { bubbles: true }));
-          }
-          break;
-        case 'scroll':
-          targetElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          break;
-        default:
-          targetElement.click();
-          break;
-      }
-      
-      // Send task completion feedback
-      await this.feedbackCollector.recordTaskStepExecution(taskId, step.step_number, true);
-      
-    } catch (error) {
-      console.error('[SmartAssistant] Failed to execute task step:', error);
+    if (!nextStep?.selector) {
+      this.logMessage('warning', 'Task guidance missing target selector');
+      return;
     }
-  }
-  
-  /**
-   * Clear task guidance overlays
-   */
-  private clearTaskGuidance(): void {
-    const guidanceOverlays = document.querySelectorAll('.synapse-task-guidance-overlay');
-    guidanceOverlays.forEach(overlay => overlay.remove());
     
-    const highlightOverlays = document.querySelectorAll('.synapse-task-target-highlight');
-    highlightOverlays.forEach(overlay => overlay.remove());
-    
-    this.removeTaskGuidanceKeyListener();
-  }
-  
-  private taskGuidanceKeyHandler: ((event: KeyboardEvent) => void) | null = null;
-  
-  /**
-   * Setup keyboard listener for task guidance
-   */
-  private setupTaskGuidanceKeyListener(): void {
-    this.taskGuidanceKeyHandler = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        this.clearTaskGuidance();
+    const target: HighlightTarget = {
+      selector: nextStep.selector,
+      type: 'task_guidance',
+      action: {
+        type: nextStep.action || 'click',
+        value: nextStep.value
+      },
+      taskData: {
+        taskId,
+        currentStep,
+        totalSteps,
+        nextStep
       }
     };
     
-    document.addEventListener('keydown', this.taskGuidanceKeyHandler, true);
+    this.highlightSystem.showTaskGuidance(target);
+    this.logMessage('success', `Task guidance: Step ${currentStep + 2}/${totalSteps}`);
   }
   
-  /**
-   * Remove keyboard listener for task guidance
-   */
-  private removeTaskGuidanceKeyListener(): void {
-    if (this.taskGuidanceKeyHandler) {
-      document.removeEventListener('keydown', this.taskGuidanceKeyHandler, true);
-      this.taskGuidanceKeyHandler = null;
-    }
-  }
 
   public getState(): AssistantState {
     return { ...this.state };
+  }
+
+  public destroy(): void {
+    this.highlightSystem.destroy();
+    this.clearSubtleHints();
+    this.hideAssistant();
+    
+    if (this.assistantElement && this.assistantElement.parentNode) {
+      this.assistantElement.parentNode.removeChild(this.assistantElement);
+    }
   }
 }

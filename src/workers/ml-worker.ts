@@ -15,7 +15,7 @@ const MAX_FEATURES_FOR_KMEANS = 16;
 // GRU Model Constants
 const SEQUENCE_LENGTH = 10;
 const HIDDEN_SIZE = 32;
-const VOCAB_SIZE = 1000;
+const INITIAL_VOCAB_SIZE = 1000; // Starting size, grows dynamically
 
 // Task sequence mining constants
 const MIN_TASK_LENGTH = 3;
@@ -119,7 +119,7 @@ class SynapseMLWorker {
       this.gruModel = tf.sequential({
         layers: [
           tf.layers.embedding({
-            inputDim: VOCAB_SIZE,
+            inputDim: INITIAL_VOCAB_SIZE,
             outputDim: 64,
             inputLength: SEQUENCE_LENGTH,
           }),
@@ -127,13 +127,17 @@ class SynapseMLWorker {
             units: HIDDEN_SIZE,
             returnSequences: true,
             dropout: 0.2,
+            kernelInitializer: 'glorotNormal',
+            recurrentInitializer: 'glorotNormal',
           }),
           tf.layers.gru({
             units: HIDDEN_SIZE,
             dropout: 0.2,
+            kernelInitializer: 'glorotNormal',
+            recurrentInitializer: 'glorotNormal',
           }),
           tf.layers.dense({
-            units: VOCAB_SIZE,
+            units: INITIAL_VOCAB_SIZE,
             activation: 'softmax',
           }),
         ],
@@ -260,13 +264,9 @@ class SynapseMLWorker {
    */
   private selectorToIndex(selector: string): number {
     if (!this.selectorVocabulary.has(selector)) {
-      if (this.vocabularyIndex < VOCAB_SIZE) {
-        this.selectorVocabulary.set(selector, this.vocabularyIndex++);
-      } else {
-        return 0; // Use 0 as unknown token
-      }
+      this.selectorVocabulary.set(selector, this.vocabularyIndex++);
     }
-    return this.selectorVocabulary.get(selector) || 0;
+    return this.selectorVocabulary.get(selector)!;
   }
 
   /**
@@ -361,6 +361,7 @@ class SynapseMLWorker {
    */
   public async predict(currentSequence: SynapseEvent[]): Promise<{
     suggestions: OperationSuggestion[];
+    reason?: string;
     taskGuidance?: {
       taskId: string;
       currentStep: number;
@@ -369,7 +370,7 @@ class SynapseMLWorker {
     };
   }> {
     if (!currentSequence || currentSequence.length === 0) {
-      return { suggestions: [] };
+      return { suggestions: [], reason: 'no_input_sequence' };
     }
 
     try {
@@ -380,7 +381,7 @@ class SynapseMLWorker {
         .slice(-10);
 
       if (recentSelectors.length === 0) {
-        return { suggestions: [] };
+        return { suggestions: [], reason: 'insufficient_context' };
       }
 
       // Check for task sequence match first
@@ -417,11 +418,15 @@ class SynapseMLWorker {
       // Combine predictions
       const allPredictions = [...new Set([...gruPredictions, ...frequencyPredictions])];
       
+      if (allPredictions.length === 0) {
+        return { suggestions: [], reason: 'low_confidence' };
+      }
+      
       return { suggestions: this.createOperationSuggestions(allPredictions, currentSequence) };
 
     } catch (error) {
       console.error('[ML Worker] Prediction error:', error);
-      return { suggestions: [] };
+      return { suggestions: [], reason: 'prediction_error' };
     }
   }
 
