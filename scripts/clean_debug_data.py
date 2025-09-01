@@ -122,6 +122,18 @@ class SynapseDataCleaner:
                 'to_selector': payload.get('to_selector')
             })
             
+        elif event_type == 'ui.clipboard':
+            # 剪贴板操作特征 - NEW: 支持ClipboardEnhancerPlugin
+            clipboard_context = event.get('context', {}).get('clipboardContext', {})
+            base_features.update({
+                'clipboard_operation': features.get('operation'),
+                'clipboard_text_length': features.get('text_length'),
+                'clipboard_has_formatting': features.get('has_formatting'),
+                'clipboard_source_url': clipboard_context.get('sourceUrl'),
+                'clipboard_source_title': clipboard_context.get('sourceTitle'),
+                'clipboard_source_selector': clipboard_context.get('sourceSelector')
+            })
+            
         elif event_type == 'browser.page_visibility':
             # 页面可见性特征
             base_features.update({
@@ -152,7 +164,10 @@ class SynapseDataCleaner:
         event_type = event['type']
         action_subtype = event_type.replace('browser.', '') if event_type.startswith('browser.') else event_type
         
-        return {
+        context = event.get('context', {})
+        payload = event.get('payload', {})
+        
+        base_features = {
             'action_subtype': action_subtype,
             'element_role': None,
             'element_text': None,
@@ -164,6 +179,18 @@ class SynapseDataCleaner:
             'y_coord': None,
             'selector': None,
         }
+        
+        # NEW: 支持WorkflowClonerPlugin的跨Tab事件关联
+        if event_type in ['browser.tab.created', 'browser.tab.activated', 'browser.tab.updated']:
+            base_features.update({
+                'parent_tab_id': context.get('parentTabId'),
+                'is_new_tab_event': context.get('isNewTabEvent', False),
+                'tab_creation_trigger': payload.get('trigger_selector') if event_type == 'browser.tab.created' else None,
+                'tab_switch_reason': payload.get('switch_reason') if event_type == 'browser.tab.activated' else None,
+                'cross_tab_correlation': True if context.get('parentTabId') else False
+            })
+            
+        return base_features
     
     def clean_events(self):
         """清洗事件数据"""
