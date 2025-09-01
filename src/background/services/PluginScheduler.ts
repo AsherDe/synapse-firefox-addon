@@ -49,8 +49,8 @@ export class PluginScheduler {
         return;
       }
       
-      // Linus: "Theory and practice clash. Practice wins."
-      // Simple rule: highest priority * confidence wins
+      // Select the suggestion with the highest product of priority and confidence.
+      // This approach balances both the importance of the suggestion and the system's certainty.
       const bestSuggestion = this.selectBestSuggestion(viableSuggestions);
       
       if (bestSuggestion) {
