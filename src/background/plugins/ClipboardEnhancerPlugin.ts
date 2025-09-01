@@ -5,6 +5,7 @@
 
 import { BasePlugin, PluginSuggestion, PluginContext } from './base';
 import { AdaptedEvent } from './EventAdapter';
+import { Config } from '../../shared/config';
 
 // Plugin-specific types - self-contained module
 interface ClipboardContext {
@@ -44,8 +45,8 @@ export class ClipboardEnhancerPlugin extends BasePlugin {
   private clipboardHistory: Map<string, ClipboardContext> = new Map();
   private currentContext: ClipboardContext | null = null;
   private focusedInputContext: InputFieldContext | null = null;
-  private readonly MAX_HISTORY_SIZE = 50;
-  private readonly CONTEXT_EXPIRY = 5 * 60 * 1000; // 5 minutes
+  private readonly MAX_HISTORY_SIZE = Config.ClipboardEnhancer.MAX_HISTORY_SIZE;
+  private readonly CONTEXT_EXPIRY = Config.ClipboardEnhancer.CONTEXT_EXPIRY;
 
   async initialize(context: PluginContext): Promise<void> {
     await super.initialize(context);
@@ -91,7 +92,7 @@ export class ClipboardEnhancerPlugin extends BasePlugin {
     if (clipboardData && clipboardData.operation === 'copy' && clipboardData.text) {
       // Create enhanced clipboard context
       const context: ClipboardContext = {
-        id: `clip_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
+        id: `clip_${Date.now()}_${Math.random().toString(36).substring(2, 2 + Config.ClipboardEnhancer.CLIPBOARD_ID_RANDOM_LENGTH)}`,  
         copiedText: clipboardData.text,
         sourceUrl: event.url || '',
         sourceTitle: event.pageTitle || '',
@@ -113,7 +114,7 @@ export class ClipboardEnhancerPlugin extends BasePlugin {
       // Cache in state manager for immediate access
       this.context.stateManager.set('clipboardContext', context);
       
-      console.log(`[${this.name}] Captured clipboard context: ${context.copiedText.substring(0, 50)}...`);
+      console.log(`[${this.name}] Captured clipboard context: ${context.copiedText.substring(0, Config.ClipboardEnhancer.TRUNCATE_LENGTH)}...`);
     }
   }
 
@@ -212,7 +213,7 @@ export class ClipboardEnhancerPlugin extends BasePlugin {
     }
 
     // Text transformations
-    if (text.length > 10) {
+    if (text.length > Config.ClipboardEnhancer.MIN_TEXT_FOR_TRANSFORM) {
       actions.push({
         type: 'transform',
         description: 'Convert to title case',
@@ -236,10 +237,10 @@ export class ClipboardEnhancerPlugin extends BasePlugin {
     }
 
     // Search suggestion
-    if (text.length > 3 && text.length < 100) {
+    if (text.length > Config.ClipboardEnhancer.MIN_SEARCH_LENGTH && text.length < Config.ClipboardEnhancer.MAX_SEARCH_LENGTH) {
       actions.push({
         type: 'search',
-        description: `Search for "${text.substring(0, 30)}..."`,
+        description: `Search for "${text.substring(0, Config.ClipboardEnhancer.SEARCH_PREVIEW_LENGTH)}..."`,
         confidence: 0.4
       });
     }
@@ -261,7 +262,7 @@ export class ClipboardEnhancerPlugin extends BasePlugin {
           actions.push({
             type: 'paste',
             description: 'Paste email address',
-            confidence: 0.95
+            confidence: Config.ClipboardEnhancer.HIGH_CONFIDENCE
           });
         } else if (text.includes('@')) {
           actions.push({
@@ -279,7 +280,7 @@ export class ClipboardEnhancerPlugin extends BasePlugin {
           actions.push({
             type: 'paste',
             description: 'Paste URL',
-            confidence: 0.95
+            confidence: Config.ClipboardEnhancer.HIGH_CONFIDENCE
           });
         } else if (text.includes('.')) {
           actions.push({
@@ -297,7 +298,7 @@ export class ClipboardEnhancerPlugin extends BasePlugin {
           actions.push({
             type: 'paste',
             description: 'Paste phone number',
-            confidence: 0.95
+            confidence: Config.ClipboardEnhancer.HIGH_CONFIDENCE
           });
         } else {
           actions.push({
@@ -312,7 +313,7 @@ export class ClipboardEnhancerPlugin extends BasePlugin {
       case 'search':
         actions.push({
           type: 'paste',
-          description: `Search for: "${text.substring(0, 30)}..."`,
+          description: `Search for: "${text.substring(0, Config.ClipboardEnhancer.SEARCH_PREVIEW_LENGTH)}..."`,
           confidence: 0.8
         });
         break;
@@ -362,7 +363,7 @@ export class ClipboardEnhancerPlugin extends BasePlugin {
   private cleanupExpiredContexts(): void {
     const now = Date.now();
     for (const [id, context] of this.clipboardHistory) {
-      if (now - context.timestamp > this.CONTEXT_EXPIRY * 2) { // Double expiry for history
+      if (now - context.timestamp > this.CONTEXT_EXPIRY * Config.ClipboardEnhancer.HISTORY_EXPIRY_MULTIPLIER) { // Double expiry for history
         this.clipboardHistory.delete(id);
       }
     }
@@ -424,7 +425,7 @@ export class ClipboardEnhancerPlugin extends BasePlugin {
   }
 
   private isPhoneNumber(text: string): boolean {
-    const phoneRegex = /^[\+]?[\d\s\-\(\)]{10,}$/;
+    const phoneRegex = new RegExp(`^[\\+]?[\\d\\s\\-\\(\\)]{${Config.ClipboardEnhancer.PHONE_MIN_LENGTH},}$`);
     return phoneRegex.test(text.trim());
   }
 

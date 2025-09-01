@@ -6,20 +6,21 @@
 import * as tf from '@tensorflow/tfjs';
 import { SynapseEvent, ActionSkill, TaskStep } from '../shared/types';
 import { OperationSuggestion } from '../smart-assistant/types';
+import { Config } from '../shared/config';
 
 // Constants for K-means clustering
-const MAX_ITERATIONS = 100;
+const MAX_ITERATIONS = Config.MLWorker.MAX_ITERATIONS;
 const MIN_FEATURES_FOR_KMEANS = 8;
-const MAX_FEATURES_FOR_KMEANS = 16;
+const MAX_FEATURES_FOR_KMEANS = Config.MLWorker.MAX_FEATURES_FOR_KMEANS;
 
 // GRU Model Constants
-const SEQUENCE_LENGTH = 10;
-const HIDDEN_SIZE = 32;
-const INITIAL_VOCAB_SIZE = 1000; // Starting size, grows dynamically
+const SEQUENCE_LENGTH = Config.MLWorker.SEQUENCE_LENGTH;
+const HIDDEN_SIZE = Config.MLWorker.HIDDEN_SIZE;
+const INITIAL_VOCAB_SIZE = Config.MLWorker.INITIAL_VOCAB_SIZE; // Starting size, grows dynamically
 
 // Task sequence mining constants
 const MIN_TASK_LENGTH = 3;
-const MAX_TASK_LENGTH = 10;
+const MAX_TASK_LENGTH = Config.MLWorker.MAX_TASK_LENGTH;
 const MIN_TASK_FREQUENCY = 2;
 
 // Simple K-means implementation

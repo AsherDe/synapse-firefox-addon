@@ -5,6 +5,7 @@
 
 import { BasePlugin, PluginSuggestion, PluginContext } from './base';
 import { AdaptedEvent } from './EventAdapter';
+import { Config } from '../../shared/config';
 
 // Plugin-specific types - self-contained module
 interface WorkflowPattern {
@@ -67,11 +68,11 @@ export class WorkflowClonerPlugin extends BasePlugin {
   private eventSequence: AdaptedEvent[] = [];
   
   // Configuration constants
-  private readonly MAX_SEQUENCE_LENGTH = 200;
-  private readonly MIN_PATTERN_FREQUENCY = 3;
-  private readonly MIN_PATTERN_LENGTH = 4;
-  private readonly CROSS_TAB_CORRELATION_WINDOW = 5000; // 5 seconds
-  private readonly WORKFLOW_TIMEOUT = 30000; // 30 seconds
+  private readonly MAX_SEQUENCE_LENGTH = Config.WorkflowCloner.MAX_SEQUENCE_LENGTH;
+  private readonly MIN_PATTERN_FREQUENCY = Config.WorkflowCloner.MIN_PATTERN_FREQUENCY;
+  private readonly MIN_PATTERN_LENGTH = Config.WorkflowCloner.MIN_PATTERN_LENGTH;
+  private readonly CROSS_TAB_CORRELATION_WINDOW = Config.WorkflowCloner.CROSS_TAB_CORRELATION_WINDOW;
+  private readonly WORKFLOW_TIMEOUT = Config.WorkflowCloner.WORKFLOW_TIMEOUT;
 
   async initialize(context: PluginContext): Promise<void> {
     await super.initialize(context);
@@ -119,7 +120,7 @@ export class WorkflowClonerPlugin extends BasePlugin {
     }
     
     // Mine new patterns periodically with FAST analysis
-    if (this.eventSequence.length % 15 === 0) {
+    if (this.eventSequence.length % Config.WorkflowCloner.PATTERN_MINING_FREQUENCY === 0) {
       await this.mineSequencePatternsWithFAST();
     }
     
@@ -216,7 +217,7 @@ export class WorkflowClonerPlugin extends BasePlugin {
           return this.createSuggestion(
             'workflow',
             `Continue workflow: ${workflow.workflowName} (${remainingSteps} steps remaining)`,
-            0.85,
+            Config.WorkflowCloner.CONTINUATION_CONFIDENCE,
             2,
             {
               workflowId,
@@ -338,7 +339,7 @@ export class WorkflowClonerPlugin extends BasePlugin {
         // Update existing pattern
         existing.frequency++;
         existing.lastSeen = Date.now();
-        existing.confidence = Math.min(0.95, existing.confidence + 0.05);
+        existing.confidence = Math.min(Config.WorkflowCloner.MAX_CONFIDENCE, existing.confidence + Config.WorkflowCloner.CONFIDENCE_INCREASE);
       } else {
         // Create new pattern
         const crossTabCount = this.countUniqueTabs(sequence);
@@ -368,7 +369,7 @@ export class WorkflowClonerPlugin extends BasePlugin {
     
     // Sliding window with cross-tab awareness
     for (let i = 0; i < this.eventSequence.length - this.MIN_PATTERN_LENGTH + 1; i++) {
-      for (let len = this.MIN_PATTERN_LENGTH; len <= Math.min(15, this.eventSequence.length - i); len++) {
+      for (let len = this.MIN_PATTERN_LENGTH; len <= Math.min(Config.WorkflowCloner.MAX_PATTERN_SEQUENCE_LENGTH, this.eventSequence.length - i); len++) {
         const window = this.eventSequence.slice(i, i + len);
         
         // Skip sequences without meaningful cross-tab activity
@@ -429,7 +430,7 @@ export class WorkflowClonerPlugin extends BasePlugin {
   }
 
   private estimateCompletionTime(sequence: ActionSkill[]): number {
-    return sequence.reduce((total, skill) => total + (skill.expectedDelay || 1000), 0);
+    return sequence.reduce((total, skill) => total + (skill.expectedDelay || Config.WorkflowCloner.DEFAULT_EXPECTED_DELAY), 0);
   }
 
   private generatePatternName(sequence: ActionSkill[]): string {
@@ -482,14 +483,14 @@ export class WorkflowClonerPlugin extends BasePlugin {
     // Clean up old tab relations every 10 minutes
     setInterval(() => {
       const now = Date.now();
-      const RELATION_EXPIRY = 30 * 60 * 1000; // 30 minutes
+      const RELATION_EXPIRY = Config.WorkflowCloner.RELATION_EXPIRY;
       
       for (const [tabId, relation] of this.tabRelations) {
         if (now - relation.timestamp > RELATION_EXPIRY) {
           this.tabRelations.delete(tabId);
         }
       }
-    }, 10 * 60 * 1000);
+    }, Config.WorkflowCloner.CLEANUP_INTERVAL);
   }
 
   private simpleHash(str: string): string {
@@ -499,7 +500,7 @@ export class WorkflowClonerPlugin extends BasePlugin {
       hash = ((hash << 5) - hash) + char;
       hash = hash & hash;
     }
-    return Math.abs(hash).toString(36);
+    return Math.abs(hash).toString(Config.WorkflowCloner.HASH_BASE);
   }
 
   private async loadWorkflowPatterns(): Promise<void> {

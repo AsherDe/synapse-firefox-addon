@@ -5,6 +5,7 @@
 
 import { BasePlugin, PluginSuggestion, PluginContext } from './base';
 import { AdaptedEvent } from './EventAdapter';
+import { Config } from '../../shared/config';
 
 interface WorkflowPattern {
   id: string;
@@ -39,9 +40,9 @@ export class WorkflowPlugin extends BasePlugin {
   private patterns: Map<string, WorkflowPattern> = new Map();
   private activeWorkflows: Map<string, ActiveWorkflow> = new Map();
   private recentEvents: AdaptedEvent[] = [];
-  private readonly MAX_RECENT_EVENTS = 50;
-  private readonly MIN_PATTERN_FREQUENCY = 2;
-  private readonly MIN_PATTERN_LENGTH = 3;
+  private readonly MAX_RECENT_EVENTS = Config.Workflow.MAX_RECENT_EVENTS;
+  private readonly MIN_PATTERN_FREQUENCY = Config.Workflow.MIN_PATTERN_FREQUENCY;
+  private readonly MIN_PATTERN_LENGTH = Config.Workflow.MIN_PATTERN_LENGTH;
   
   async initialize(context: PluginContext): Promise<void> {
     await super.initialize(context);
@@ -79,8 +80,8 @@ export class WorkflowPlugin extends BasePlugin {
       suggestions.push(startSuggestion);
     }
     
-    // Mine new patterns periodically (every 10 events)
-    if (this.recentEvents.length % 10 === 0) {
+    // Mine new patterns periodically
+    if (this.recentEvents.length % Config.Workflow.PATTERN_MINING_INTERVAL === 0) {
       await this.mineNewPatterns();
     }
     
@@ -218,7 +219,7 @@ export class WorkflowPlugin extends BasePlugin {
     
     // Simple sliding window approach
     for (let i = 0; i < events.length - this.MIN_PATTERN_LENGTH + 1; i++) {
-      for (let len = this.MIN_PATTERN_LENGTH; len <= Math.min(10, events.length - i); len++) {
+      for (let len = this.MIN_PATTERN_LENGTH; len <= Math.min(Config.Workflow.MAX_SEQUENCE_LENGTH, events.length - i); len++) {
         const sequence = events.slice(i, i + len).map(e => ({
           type: e.type,
           target: e.target,
@@ -250,7 +251,7 @@ export class WorkflowPlugin extends BasePlugin {
       hash = ((hash << 5) - hash) + char;
       hash = hash & hash; // Convert to 32-bit integer
     }
-    return Math.abs(hash).toString(36);
+    return Math.abs(hash).toString(Config.Workflow.HASH_BASE);
   }
   
   private async loadPatterns(): Promise<void> {

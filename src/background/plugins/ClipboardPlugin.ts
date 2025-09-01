@@ -5,6 +5,7 @@
 
 import { BasePlugin, PluginSuggestion, PluginContext } from './base';
 import { AdaptedEvent } from './EventAdapter';
+import { Config } from '../../shared/config';
 
 interface ClipboardContext {
   id: string;
@@ -32,7 +33,7 @@ export class ClipboardPlugin extends BasePlugin {
   
   private currentContext: ClipboardContext | null = null;
   private contextHistory: ClipboardContext[] = [];
-  private readonly MAX_HISTORY = 20;
+  private readonly MAX_HISTORY = Config.ClipboardPlugin.MAX_HISTORY;
   private pendingPasteTarget: string | null = null;
   
   async initialize(context: PluginContext): Promise<void> {
@@ -70,7 +71,7 @@ export class ClipboardPlugin extends BasePlugin {
     
     // Create rich clipboard context
     const context: ClipboardContext = {
-      id: `clipboard_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`,
+      id: `clipboard_${Date.now()}_${Math.random().toString(36).substring(2, 2 + Config.ClipboardPlugin.ID_RANDOM_LENGTH)}`,
       content: String(event.value),
       sourceUrl: event.url,
       sourceTitle: event.pageTitle || 'Unknown',
@@ -141,7 +142,7 @@ export class ClipboardPlugin extends BasePlugin {
     }
     
     // Offer summary for long content
-    if (context.content.length > 200) {
+    if (context.content.length > Config.ClipboardPlugin.CONTENT_TRUNCATE_LENGTH) {
       options.push({
         id: 'paste_summary',
         label: 'Paste Summary',
@@ -177,12 +178,12 @@ export class ClipboardPlugin extends BasePlugin {
     
     // Check if clipboard context is recent (within 2 minutes)
     const timeDiff = Date.now() - this.currentContext.timestamp;
-    return timeDiff < 2 * 60 * 1000;
+    return timeDiff < Config.ClipboardPlugin.RECENT_TIME_WINDOW;
   }
   
   private isAiIntegrationCandidate(context: ClipboardContext, event: AdaptedEvent): boolean {
     // Heuristics for when AI integration would be useful
-    const hasComplexContent = context.content.length > 100;
+    const hasComplexContent = context.content.length > Config.ClipboardPlugin.COMPLEX_CONTENT_LENGTH;
     const hasCodeContext = context.elementType === 'code' || context.content.includes('function') || context.content.includes('class');
     const hasAcademicContent = context.sourceTitle.toLowerCase().includes('paper') || 
                               context.sourceTitle.toLowerCase().includes('research') ||
@@ -195,12 +196,12 @@ export class ClipboardPlugin extends BasePlugin {
     // Extract surrounding context from the selection
     // For now, return the content itself - can be enhanced
     const content = String(event.value || '');
-    if (content.length < 50) {
+    if (content.length < Config.ClipboardPlugin.SHORT_CONTENT_LENGTH) {
       return content;
     }
     
     // Return first and last parts for context
-    return `${content.substring(0, 25)}...${content.substring(content.length - 25)}`;
+    return `${content.substring(0, Config.ClipboardPlugin.SUMMARY_LENGTH)}...${content.substring(content.length - Config.ClipboardPlugin.SUMMARY_LENGTH)}`;
   }
   
   private addToHistory(context: ClipboardContext): void {
@@ -241,8 +242,8 @@ export class ClipboardPlugin extends BasePlugin {
         
       case 'paste_summary':
         // For now, return truncated version - future: AI summarization
-        return context.content.length > 200 
-          ? context.content.substring(0, 200) + '...'
+        return context.content.length > Config.ClipboardPlugin.CONTENT_TRUNCATE_LENGTH 
+          ? context.content.substring(0, Config.ClipboardPlugin.CONTENT_TRUNCATE_LENGTH) + '...'
           : context.content;
           
       case 'send_to_ai':
