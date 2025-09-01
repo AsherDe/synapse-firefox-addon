@@ -268,8 +268,14 @@ export class ExecutionEngine {
    */
   private async executeScriptInTab(tabId: number | null, script: string): Promise<void> {
     if (!tabId) {
-      // Execute in current tab if no specific tab
-      eval(script);
+      // Execute in current tab using safer script execution
+      try {
+        const scriptFunction = new Function(script);
+        scriptFunction();
+      } catch (error) {
+        console.error('[ExecutionEngine] Failed to execute script in current tab:', error);
+        throw error;
+      }
       return;
     }
     
