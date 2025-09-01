@@ -280,9 +280,16 @@ class SynapseMLWorker {
   }
 
   /**
-   * Simplified sequence pattern mining to discover frequent task sequences
+   * Enhanced sequence pattern mining with cross-tab support and long sequence analysis
+   * Supports detection of patterns that include tab.created and tab.activated events
    */
-  private mineSequencePatterns(selectors: string[]): void {
+  private mineSequencePatterns(selectors: string[], eventSequence?: SynapseEvent[]): void {
+    // Enhanced pattern mining to support cross-tab workflows
+    if (eventSequence && eventSequence.length > 0) {
+      this.mineEnhancedSequencePatterns(eventSequence);
+    }
+    
+    // Original selector-based pattern mining (for backward compatibility)
     for (let length = MIN_TASK_LENGTH; length <= Math.min(MAX_TASK_LENGTH, selectors.length); length++) {
       for (let i = 0; i <= selectors.length - length; i++) {
         const sequence = selectors.slice(i, i + length);
@@ -290,6 +297,87 @@ class SynapseMLWorker {
         
         this.sequencePatterns.set(sequenceKey, (this.sequencePatterns.get(sequenceKey) || 0) + 1);
       }
+    }
+  }
+
+  /**
+   * Enhanced pattern mining for cross-tab workflows using FAST-inspired analysis
+   * Detects long sequences that span multiple tabs and include tab events
+   */
+  private mineEnhancedSequencePatterns(eventSequence: SynapseEvent[]): void {
+    const LONG_SEQUENCE_LENGTH = 20; // Support longer sequences for complex workflows
+    const MIN_CROSS_TAB_FREQUENCY = 2;
+    
+    // Extract sequences with tab context information
+    for (let length = MIN_TASK_LENGTH; length <= Math.min(LONG_SEQUENCE_LENGTH, eventSequence.length); length++) {
+      for (let i = 0; i <= eventSequence.length - length; i++) {
+        const sequence = eventSequence.slice(i, i + length);
+        
+        // Check if sequence contains cross-tab activity
+        const tabIds = new Set(sequence.map(e => e.context?.tabId).filter(Boolean));
+        if (tabIds.size < 2) {
+          continue; // Skip single-tab sequences for this enhanced mining
+        }
+        
+        // Generate enhanced sequence key that includes tab transitions
+        const enhancedKey = this.generateEnhancedSequenceKey(sequence);
+        
+        // Track cross-tab patterns separately
+        const crossTabPatternKey = `cross_tab_${enhancedKey}`;
+        this.sequencePatterns.set(
+          crossTabPatternKey, 
+          (this.sequencePatterns.get(crossTabPatternKey) || 0) + 1
+        );
+        
+        // If pattern is frequent enough, mark it as a workflow candidate
+        const frequency = this.sequencePatterns.get(crossTabPatternKey) || 0;
+        if (frequency >= MIN_CROSS_TAB_FREQUENCY) {
+          this.markAsWorkflowCandidate(crossTabPatternKey, sequence, frequency);
+        }
+      }
+    }
+  }
+
+  /**
+   * Generate enhanced sequence key that captures tab transitions and event types
+   */
+  private generateEnhancedSequenceKey(sequence: SynapseEvent[]): string {
+    return sequence.map((event, index) => {
+      const tabId = event.context?.tabId || 'null';
+      const prevTabId = index > 0 ? (sequence[index - 1].context?.tabId || 'null') : tabId;
+      const isTabSwitch = tabId !== prevTabId;
+      
+      const eventType = event.type.replace(/^(ui\.|browser\.|user\.|form\.)/, '');
+      const selector = event.payload?.targetSelector ? 
+        this.simplifySelector(event.payload.targetSelector) : 'any';
+      
+      return `${eventType}${isTabSwitch ? `[T${tabId}]` : ''}:${selector}`;
+    }).join(' -> ');
+  }
+
+  /**
+   * Mark sequence as workflow candidate for plugin system
+   */
+  private markAsWorkflowCandidate(patternKey: string, sequence: SynapseEvent[], frequency: number): void {
+    const workflowId = `wf_${this.hashString(patternKey)}`;
+    
+    // Store workflow metadata for plugins to access  
+    console.log(`[ML Worker] Discovered workflow candidate: ${workflowId} (frequency: ${frequency})`);
+    
+    // TODO: Store workflow metadata in state manager for plugin access
+    // This data structure is ready for when we need to persist workflow patterns
+    const workflowMetadata = {
+      id: workflowId,
+      patternKey,
+      sequenceLength: sequence.length,
+      frequency,
+      crossTabCount: new Set(sequence.map(e => e.context?.tabId).filter(Boolean)).size,
+      avgDuration: sequence[sequence.length - 1].timestamp - sequence[0].timestamp
+    };
+    
+    // Placeholder for future workflow persistence logic
+    if (workflowMetadata.frequency > 5) {
+      // Could be stored in state manager for plugin system access
     }
   }
 
@@ -490,7 +578,7 @@ class SynapseMLWorker {
    */
   private createTaskGuidanceSuggestions(
     nextStep: TaskStep,
-    context: SynapseEvent[]
+    _context: SynapseEvent[]
   ): OperationSuggestion[] {
     return [{
       id: `task_guidance_${Date.now()}`,
@@ -626,7 +714,7 @@ class SynapseMLWorker {
         .map(event => event.payload.targetSelector!);
       
       if (selectors.length >= MIN_TASK_LENGTH) {
-        this.mineSequencePatterns(selectors);
+        this.mineSequencePatterns(selectors, sequence);
         this.updateDiscoveredTasks();
       }
       

@@ -26,6 +26,9 @@ export class SmartAssistant {
   
   // UI elements
   private assistantElement: HTMLElement | null = null;
+  private clipboardSuggestionElement: HTMLElement | null = null;
+  private currentClipboardContext: any = null;
+  private focusedInput: HTMLElement | null = null;
 
   constructor() {
     this.state = {
@@ -81,6 +84,24 @@ export class SmartAssistant {
       if (!this.state.isEnabled) return;
       
       this.handlePredictionUpdate(message.data);
+    });
+
+    // Clipboard enhancement handler
+    this.messagingService.onMessage('clipboardContextAvailable', (message) => {
+      if (this.state.isEnabled && message.data) {
+        this.handleClipboardContext(message.data);
+      }
+    });
+
+    // Input focus handler for clipboard suggestions
+    document.addEventListener('focusin', (event) => {
+      if (this.isInputElement(event.target)) {
+        this.handleInputFocus(event.target as HTMLElement);
+      }
+    });
+
+    document.addEventListener('focusout', () => {
+      this.hideClipboardSuggestions();
     });
   }
 
@@ -567,9 +588,341 @@ export class SmartAssistant {
     this.highlightSystem.destroy();
     this.clearSubtleHints();
     this.hideAssistant();
+    this.hideClipboardSuggestions();
     
     if (this.assistantElement && this.assistantElement.parentNode) {
       this.assistantElement.parentNode.removeChild(this.assistantElement);
     }
+    
+    if (this.clipboardSuggestionElement && this.clipboardSuggestionElement.parentNode) {
+      this.clipboardSuggestionElement.parentNode.removeChild(this.clipboardSuggestionElement);
+    }
+  }
+
+  // Clipboard enhancement methods
+  
+  /**
+   * Handle clipboard context from plugin system
+   */
+  private handleClipboardContext(contextData: any): void {
+    this.currentClipboardContext = contextData;
+    console.log('[SmartAssistant] Clipboard context updated:', contextData);
+  }
+
+  /**
+   * Handle input field focus for clipboard suggestions
+   */
+  private async handleInputFocus(inputElement: HTMLElement): Promise<void> {
+    this.focusedInput = inputElement;
+    
+    // Check if we have clipboard context available
+    if (this.currentClipboardContext) {
+      await this.showClipboardSuggestions(inputElement);
+    } else {
+      // Request clipboard context from background
+      try {
+        const response = await this.messagingService.sendToContentScript({
+          type: 'requestClipboardContext'
+        });
+        
+        if (response?.data?.clipboardContext) {
+          this.currentClipboardContext = response.data.clipboardContext;
+          await this.showClipboardSuggestions(inputElement);
+        }
+      } catch (error) {
+        console.debug('[SmartAssistant] No clipboard context available');
+      }
+    }
+  }
+
+  /**
+   * Show clipboard suggestions near focused input
+   */
+  private async showClipboardSuggestions(inputElement: HTMLElement): Promise<void> {
+    if (!this.currentClipboardContext || !this.isValidClipboardContext()) {
+      return;
+    }
+
+    const suggestions = this.generateClipboardSuggestions(inputElement);
+    if (suggestions.length === 0) {
+      return;
+    }
+
+    this.hideClipboardSuggestions();
+    this.clipboardSuggestionElement = this.createClipboardSuggestionUI(inputElement, suggestions);
+    document.body.appendChild(this.clipboardSuggestionElement);
+  }
+
+  /**
+   * Generate contextual clipboard suggestions based on input field
+   */
+  private generateClipboardSuggestions(inputElement: HTMLElement): Array<{
+    text: string;
+    description: string;
+    confidence: number;
+    action: string;
+  }> {
+    const suggestions: Array<{
+      text: string;
+      description: string;
+      confidence: number;
+      action: string;
+    }> = [];
+
+    const clipboardText = this.currentClipboardContext.copiedText || '';
+    if (!clipboardText || clipboardText.length === 0) {
+      return suggestions;
+    }
+
+    const inputType = this.getInputType(inputElement);
+    const placeholder = inputElement.getAttribute('placeholder') || '';
+
+    // Basic paste suggestion
+    suggestions.push({
+      text: this.truncateText(clipboardText, 50),
+      description: `Paste from ${this.currentClipboardContext.sourceTitle || 'clipboard'}`,
+      confidence: 0.8,
+      action: 'paste'
+    });
+
+    // Smart suggestions based on input type
+    switch (inputType.toLowerCase()) {
+      case 'email':
+        if (this.isEmail(clipboardText)) {
+          suggestions.push({
+            text: clipboardText,
+            description: 'Paste email address',
+            confidence: 0.95,
+            action: 'paste_email'
+          });
+        }
+        break;
+
+      case 'tel':
+        if (this.isPhoneNumber(clipboardText)) {
+          suggestions.push({
+            text: this.formatPhoneNumber(clipboardText),
+            description: 'Paste formatted phone number',
+            confidence: 0.9,
+            action: 'paste_phone'
+          });
+        }
+        break;
+
+      case 'url':
+        if (this.isURL(clipboardText)) {
+          suggestions.push({
+            text: clipboardText,
+            description: 'Paste URL',
+            confidence: 0.95,
+            action: 'paste_url'
+          });
+        }
+        break;
+    }
+
+    // Text transformations
+    if (clipboardText.length > 10) {
+      suggestions.push({
+        text: this.toTitleCase(clipboardText),
+        description: 'Paste as title case',
+        confidence: 0.6,
+        action: 'paste_title_case'
+      });
+    }
+
+    return suggestions.sort((a, b) => b.confidence - a.confidence).slice(0, 3);
+  }
+
+  /**
+   * Create clipboard suggestion UI element
+   */
+  private createClipboardSuggestionUI(inputElement: HTMLElement, suggestions: Array<{
+    text: string;
+    description: string;
+    confidence: number;
+    action: string;
+  }>): HTMLElement {
+    const container = document.createElement('div');
+    container.className = 'synapse-clipboard-suggestions';
+    
+    // Position relative to input element
+    const rect = inputElement.getBoundingClientRect();
+    container.style.cssText = `
+      position: fixed;
+      top: ${rect.bottom + 5}px;
+      left: ${rect.left}px;
+      min-width: ${Math.max(200, rect.width)}px;
+      background: #fff;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+      z-index: 10000;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 13px;
+    `;
+
+    // Add suggestions
+    suggestions.forEach((suggestion, index) => {
+      const item = document.createElement('div');
+      item.className = 'synapse-clipboard-item';
+      item.style.cssText = `
+        padding: 8px 12px;
+        border-bottom: ${index < suggestions.length - 1 ? '1px solid #eee' : 'none'};
+        cursor: pointer;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      `;
+
+      const textDiv = document.createElement('div');
+      textDiv.style.cssText = `
+        font-weight: 500;
+        color: #333;
+        word-break: break-all;
+      `;
+      textDiv.textContent = suggestion.text;
+
+      const descDiv = document.createElement('div');
+      descDiv.style.cssText = `
+        font-size: 11px;
+        color: #666;
+      `;
+      descDiv.textContent = suggestion.description;
+
+      item.appendChild(textDiv);
+      item.appendChild(descDiv);
+
+      // Hover effects
+      item.addEventListener('mouseenter', () => {
+        item.style.backgroundColor = '#f5f5f5';
+      });
+      
+      item.addEventListener('mouseleave', () => {
+        item.style.backgroundColor = 'transparent';
+      });
+
+      // Click handler
+      item.addEventListener('click', () => {
+        this.executeClipboardSuggestion(suggestion, inputElement);
+        this.hideClipboardSuggestions();
+      });
+
+      container.appendChild(item);
+    });
+
+    return container;
+  }
+
+  /**
+   * Execute clipboard suggestion
+   */
+  private executeClipboardSuggestion(suggestion: { text: string; action: string }, inputElement: HTMLElement): void {
+    const input = inputElement as HTMLInputElement;
+    
+    switch (suggestion.action) {
+      case 'paste':
+      case 'paste_email':
+      case 'paste_phone':
+      case 'paste_url':
+      case 'paste_title_case':
+        input.value = suggestion.text;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        break;
+    }
+
+    // Update clipboard context usage
+    if (this.currentClipboardContext?.id) {
+      this.messagingService.sendToContentScript({
+        type: 'updateClipboardUsage',
+        data: { contextId: this.currentClipboardContext.id }
+      });
+    }
+  }
+
+  /**
+   * Hide clipboard suggestions
+   */
+  private hideClipboardSuggestions(): void {
+    if (this.clipboardSuggestionElement) {
+      if (this.clipboardSuggestionElement.parentNode) {
+        this.clipboardSuggestionElement.parentNode.removeChild(this.clipboardSuggestionElement);
+      }
+      this.clipboardSuggestionElement = null;
+    }
+  }
+
+  /**
+   * Check if element is an input field
+   */
+  private isInputElement(element: EventTarget | null): element is HTMLElement {
+    if (!element || !(element instanceof HTMLElement)) {
+      return false;
+    }
+    
+    const tagName = element.tagName.toLowerCase();
+    return tagName === 'input' || 
+           tagName === 'textarea' || 
+           element.hasAttribute('contenteditable');
+  }
+
+  /**
+   * Get input field type
+   */
+  private getInputType(element: HTMLElement): string {
+    if (element instanceof HTMLInputElement) {
+      return element.type || 'text';
+    }
+    return 'text';
+  }
+
+  /**
+   * Check if clipboard context is still valid
+   */
+  private isValidClipboardContext(): boolean {
+    if (!this.currentClipboardContext) {
+      return false;
+    }
+    
+    const CONTEXT_EXPIRY = 5 * 60 * 1000; // 5 minutes
+    const age = Date.now() - (this.currentClipboardContext.timestamp || 0);
+    return age < CONTEXT_EXPIRY;
+  }
+
+  // Utility methods
+  private isEmail(text: string): boolean {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return emailRegex.test(text.trim());
+  }
+
+  private isPhoneNumber(text: string): boolean {
+    const phoneRegex = /^[\+]?[\d\s\-\(\)]{10,}$/;
+    return phoneRegex.test(text.trim());
+  }
+
+  private isURL(text: string): boolean {
+    try {
+      new URL(text.trim());
+      return true;
+    } catch {
+      return /^(https?:\/\/|www\.|[a-zA-Z0-9-]+\.[a-zA-Z]{2,})/i.test(text.trim());
+    }
+  }
+
+  private formatPhoneNumber(text: string): string {
+    return text.replace(/[^\d+]/g, '');
+  }
+
+  private toTitleCase(text: string): string {
+    return text.replace(/\w\S*/g, (txt) => 
+      txt.charAt(0).toUpperCase() + txt.substring(1).toLowerCase()
+    );
+  }
+
+  private truncateText(text: string, maxLength: number): string {
+    if (text.length <= maxLength) {
+      return text;
+    }
+    return text.substring(0, maxLength - 3) + '...';
   }
 }

@@ -13,7 +13,7 @@ export interface OperationSuggestion {
 }
 
 export interface SuggestedAction {
-  type: 'click' | 'keydown' | 'text_input' | 'scroll';
+  type: 'click' | 'keydown' | 'text_input' | 'scroll' | 'tab_switch' | 'new_tab';
   target?: string;
   value?: string;
   sequence?: number;
