@@ -170,6 +170,17 @@ export class MLService {
         this.stateManager.set('lastEventProcessedAt', Date.now());
         break;
       }
+      
+      case 'storeWorkflowMetadata': {
+        // Store workflow metadata from ML worker for plugin access
+        if (message.data?.key && message.data?.metadata) {
+          this.stateManager.set(message.data.key, message.data.metadata);
+          console.log(`[MLService] Stored workflow metadata: ${message.data.key}`, message.data.metadata);
+        } else {
+          console.warn('[MLService] Invalid workflow metadata received:', message.data);
+        }
+        break;
+      }
         
       default:
         console.warn('[MLService] Unknown worker message type:', message.type);

@@ -365,20 +365,29 @@ class SynapseMLWorker {
     // Store workflow metadata for plugins to access  
     console.log(`[ML Worker] Discovered workflow candidate: ${workflowId} (frequency: ${frequency})`);
     
-    // TODO: Store workflow metadata in state manager for plugin access
-    // This data structure is ready for when we need to persist workflow patterns
+    // Store workflow metadata in state manager for plugin access
     const workflowMetadata = {
       id: workflowId,
       patternKey,
       sequenceLength: sequence.length,
       frequency,
       crossTabCount: new Set(sequence.map(e => e.context?.tabId).filter(Boolean)).size,
-      avgDuration: sequence[sequence.length - 1].timestamp - sequence[0].timestamp
+      avgDuration: sequence[sequence.length - 1].timestamp - sequence[0].timestamp,
+      firstAction: sequence[0]?.type || 'unknown',
+      lastAction: sequence[sequence.length - 1]?.type || 'unknown',
+      timestamp: Date.now()
     };
     
-    // Placeholder for future workflow persistence logic
-    if (workflowMetadata.frequency > 5) {
-      // Could be stored in state manager for plugin system access
+    // Send workflow metadata to main thread for state manager storage
+    if (workflowMetadata.frequency > 2) { // Store patterns with reasonable frequency
+      self.postMessage({
+        type: 'storeWorkflowMetadata',
+        success: true,
+        data: {
+          key: `workflow_${workflowId}`,
+          metadata: workflowMetadata
+        }
+      });
     }
   }
 
