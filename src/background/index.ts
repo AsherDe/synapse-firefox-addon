@@ -251,7 +251,7 @@ async function handleSynapseEvent(message: any, _sender: any): Promise<void> {
       
       // Check if training is needed
       const sequence = await dataStorage.getSequence('globalActionSequence');
-      if (sequence.length % 50 === 0 && sequence.length >= 20) {
+      if (sequence.length % 20 === 0 && sequence.length >= 20) {
         try {
           await mlService.trainModel();
           console.log('[Background] Model training completed');

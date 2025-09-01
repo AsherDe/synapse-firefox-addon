@@ -695,8 +695,8 @@ class SynapseMLWorker {
    */
   private shouldTrainGRU(sequence: SynapseEvent[]): boolean {
     const selectorsWithTargets = sequence.filter(e => e.payload?.targetSelector);
-    return selectorsWithTargets.length >= SEQUENCE_LENGTH * 2 && 
-           this.selectorVocabulary.size >= 10;
+    return selectorsWithTargets.length >= SEQUENCE_LENGTH + 5 && 
+           this.selectorVocabulary.size >= 5;
   }
 
   /**
@@ -837,11 +837,13 @@ self.onmessage = async (e) => {
         
       case 'predict':
         // GRU-based intelligent focus prediction
-        const suggestions = await worker.predict(data.currentSequence || []);
+        const predictResult = await worker.predict(data.currentSequence || []);
         const predictionResult = {
-          suggestions,
+          suggestions: predictResult.suggestions,
           timestamp: Date.now(),
-          modelType: 'gru_intelligent_focus'
+          modelType: 'gru_intelligent_focus',
+          taskGuidance: predictResult.taskGuidance,
+          reason: predictResult.reason
         };
         self.postMessage({ type: 'predictResult', success: true, data: predictionResult, requestId });
         break;
