@@ -64,6 +64,7 @@ def main():
     parser.add_argument('--skip-exp1', action='store_true', help='跳过实验一')
     parser.add_argument('--skip-exp2', action='store_true', help='跳过实验二')
     parser.add_argument('--skip-exp3', action='store_true', help='跳过实验三')
+    parser.add_argument('--skip-exp4', action='store_true', help='跳过实验四（工作流分析）')
     parser.add_argument('--user-group', choices=['test', 'control'], 
                        help='用户组别（实验三需要）')
     parser.add_argument('--compare-file', help='对照组数据文件（实验三可选）')
@@ -147,6 +148,18 @@ def main():
             if not run_command(exp3_cmd, f"实验三: 用户研究分析 ({args.user_group}组)"):
                 print("实验三执行失败")
     
+    # 步骤5: 实验四 - 工作流模式分析 (NEW)
+    if not args.skip_exp4:
+        exp4_cmd = [
+            sys.executable,
+            str(script_dir / 'experiment_4_workflow_analysis.py'),
+            str(cleaned_file),
+            '--save-results'
+        ]
+        
+        if not run_command(exp4_cmd, "实验四: 跨Tab工作流模式分析"):
+            print("实验四执行失败")
+    
     print("\n" + "="*60)
     print("实验套件执行完成！")
     print("="*60)
@@ -158,7 +171,9 @@ def main():
         'data_stats.json', 
         'experiment_1_dct_analysis.png',
         'experiment_2_prediction_results.png',
-        f'experiment_3_user_behavior_{args.user_group}.png' if args.user_group else None
+        f'experiment_3_user_behavior_{args.user_group}.png' if args.user_group else None,
+        'workflow_analysis_*.png',
+        'workflow_analysis_results_*.json'
     ]
     
     for filename in output_files:

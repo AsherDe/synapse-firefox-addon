@@ -4,11 +4,12 @@ This directory contains a complete Python script suite for Synapse plugin paper 
 
 ## 🎯 Experiment Overview
 
-This suite includes three core experiments corresponding to the main research questions of the paper:
+This suite includes four core experiments corresponding to the main research questions of the paper:
 
 1. **Experiment 1: FAST Feasibility Analysis** - Validate compression effects of frequency domain transforms on browser behavior data
 2. **Experiment 2: Next Action Prediction Accuracy** - Compare prediction performance of different models
 3. **Experiment 3: User Study Analysis** - Analyze A/B test results to evaluate the actual effectiveness of prediction features
+4. **Experiment 4: Cross-Tab Workflow Analysis** - Analyze cross-tab workflow patterns and clipboard enhancement effectiveness
 
 ## 📋 Environment Setup
 
@@ -135,6 +136,34 @@ python experiment_3_user_study.py user_test_data.csv --group test --compare user
 python experiment_3_user_study.py user_data.csv --group test --skip-viz
 ```
 
+### Experiment 4: Cross-Tab Workflow Analysis (`experiment_4_workflow_analysis.py`)
+
+**Objective**: Analyze cross-tab workflow patterns and evaluate clipboard enhancement effectiveness
+
+**Input**: Cleaned CSV data file
+
+**Output**:
+- `workflow_analysis_{timestamp}.png` - Comprehensive workflow analysis charts
+- `workflow_analysis_results_{timestamp}.json` - Detailed analysis results
+- Console output workflow analysis report
+
+**Analysis Content**:
+- Cross-tab workflow pattern detection
+- Clipboard context usage analysis
+- Workflow automation potential assessment
+- Task guidance effectiveness evaluation
+
+```bash
+# Complete workflow analysis
+python experiment_4_workflow_analysis.py cleaned_data.csv
+
+# Custom workflow parameters
+python experiment_4_workflow_analysis.py cleaned_data.csv --min-length 4 --max-gap 60
+
+# Save results and skip visualization
+python experiment_4_workflow_analysis.py cleaned_data.csv --save-results --skip-viz
+```
+
 ## 📁 Output File Descriptions
 
 | Filename | Description |
@@ -144,6 +173,8 @@ python experiment_3_user_study.py user_data.csv --group test --skip-viz
 | `experiment_1_dct_analysis.png` | Experiment 1: DCT analysis comprehensive charts |
 | `experiment_2_prediction_results.png` | Experiment 2: Model performance comparison charts |
 | `experiment_3_user_behavior_{group}.png` | Experiment 3: User behavior analysis charts |
+| `workflow_analysis_{timestamp}.png` | Experiment 4: Cross-tab workflow analysis charts |
+| `workflow_analysis_results_{timestamp}.json` | Experiment 4: Detailed workflow analysis results |
 
 ## 🔧 Data Requirements
 
@@ -151,6 +182,7 @@ python experiment_3_user_study.py user_data.csv --group test --skip-viz
 - **Experiment 1**: At least click events (for generating simulated trajectories)
 - **Experiment 2**: At least 50 events, recommended 200+ events
 - **Experiment 3**: At least 10 events, recommended one complete usage session
+- **Experiment 4**: At least 20 events with cross-tab activity, recommended 100+ events
 
 ### Data Quality Recommendations
 1. **Continuous usage data**: Ensure data comes from actual continuous usage scenarios
@@ -173,6 +205,12 @@ python experiment_3_user_study.py user_data.csv --group test --skip-viz
 - **Prediction-triggered follow-up action rate > 50%**: Predictions have practical guidance value
 - **Average reaction time < 3 seconds**: Users respond positively to predictions
 - **Task completion time reduction**: Direct evidence of test group efficiency improvement
+
+### Experiment 4 Results Interpretation
+- **Cross-tab workflow patterns > 5**: Indicates significant cross-tab usage behavior
+- **Average workflow length > 4 events**: Shows complexity suitable for automation
+- **Repeatability score > 30%**: Indicates patterns worth automating
+- **Clipboard chain detection > 3**: Shows effective clipboard context usage
 
 ## 🐛 Common Issues
 
