@@ -7,6 +7,7 @@ import { MessageRouter } from './services/MessageRouter';
 import { StateManager } from './services/StateManager';
 import { DataStorage } from './services/DataStorage';
 import { MLService } from './services/MLService';
+import { PluginSystemAdapter } from './PluginSystemAdapter';
 
 // Browser API compatibility using webextension-polyfill
 declare var browser: any; // webextension-polyfill provides this globally
@@ -19,6 +20,7 @@ let messageRouter: MessageRouter;
 let stateManager: StateManager;
 let dataStorage: DataStorage;
 let mlService: MLService;
+let pluginSystem: PluginSystemAdapter;
 
 // Initialize all services
 async function initializeServices(): Promise<void> {
@@ -57,6 +59,10 @@ async function initializeServices(): Promise<void> {
     
     // MLService放在最后创建，确保状态监听器已经设置好
     mlService = new MLService(stateManager, dataStorage);
+    
+    // Initialize plugin system after all core services are ready
+    pluginSystem = new PluginSystemAdapter();
+    await pluginSystem.initialize(messageRouter, stateManager, dataStorage, mlService);
     
     // Initialize floating control center on all tabs
     setTimeout(async () => {
@@ -226,6 +232,13 @@ async function handleSynapseEvent(message: any, _sender: any): Promise<void> {
       
       // Forward to ML service
       await mlService.processEvent(message);
+      
+      // Process through plugin system (non-blocking)
+      if (pluginSystem && pluginSystem.isInitialized()) {
+        pluginSystem.processEvent(message).catch(error => {
+          console.warn('[Background] Plugin system processing error:', error);
+        });
+      }
       
       // Broadcast to connected clients
       messageRouter.broadcast('popup', {
