@@ -142,10 +142,6 @@ export class MLService {
         
       case 'prediction_result':
         this.stateManager.set('lastPrediction', message.data);
-        // Broadcast intelligent focus suggestions to content scripts
-        if (message.data?.suggestions?.length > 0) {
-          this.broadcastIntelligentFocus(message.data.suggestions);
-        }
         console.log('[MLService] Prediction result received');
         break;
         
@@ -264,12 +260,6 @@ export class MLService {
       });
       
       this.stateManager.set('lastPrediction', result);
-      
-      // If we have suggestions, broadcast them immediately
-      if (result?.suggestions?.length > 0) {
-        this.broadcastIntelligentFocus(result.suggestions);
-      }
-      
       return result;
       
     } catch (error) {
@@ -278,37 +268,6 @@ export class MLService {
     }
   }
 
-  /**
-   * Broadcast intelligent focus suggestions to all content scripts
-   */
-  private async broadcastIntelligentFocus(suggestions: any[]): Promise<void> {
-    try {
-      // Get all tabs to broadcast to
-      const tabs = await browser.tabs.query({});
-      
-      for (const tab of tabs) {
-        if (tab.id && tab.url && !tab.url.startsWith('chrome://') && !tab.url.startsWith('moz-extension://')) {
-          try {
-            await browser.tabs.sendMessage(tab.id, {
-              type: 'INTELLIGENT_FOCUS_UPDATE',
-              data: {
-                suggestions,
-                timestamp: Date.now()
-              }
-            });
-          } catch (error) {
-            // Ignore errors for tabs without content scripts
-            console.debug('[MLService] Could not send message to tab:', tab.id);
-          }
-        }
-      }
-      
-      console.log(`[MLService] Broadcasted ${suggestions.length} intelligent focus suggestions`);
-      
-    } catch (error) {
-      console.error('[MLService] Failed to broadcast intelligent focus:', error);
-    }
-  }
 
   /**
    * Get model information

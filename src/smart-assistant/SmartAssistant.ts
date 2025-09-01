@@ -76,18 +76,11 @@ export class SmartAssistant {
       }
     });
     
-    // Handle TASK_PATH_GUIDANCE messages from background
-    this.messagingService.onMessage('TASK_PATH_GUIDANCE', (message) => {
-      if (this.state.isEnabled && message.data?.isTaskGuidance) {
-        this.showTaskGuidance(message.data);
-      }
-    });
-    
-    // Handle INTELLIGENT_FOCUS_SUGGESTION messages from background  
-    this.messagingService.onMessage('INTELLIGENT_FOCUS_SUGGESTION', (message) => {
-      if (this.state.isEnabled && message.data?.suggestions?.length > 0 && !message.data?.isTaskGuidance) {
-        this.showIntelligentFocus(message.data.suggestions);
-      }
+    // Unified prediction update handler - single entry point for all UI updates
+    this.messagingService.onMessage('PREDICTION_UPDATE', (message) => {
+      if (!this.state.isEnabled) return;
+      
+      this.handlePredictionUpdate(message.data);
     });
   }
 
@@ -508,6 +501,31 @@ export class SmartAssistant {
         data: { level, message }
       });
     }
+  }
+
+  /**
+   * Unified prediction update handler - intelligently chooses between task guidance and intelligent focus
+   */
+  private handlePredictionUpdate(data: any): void {
+    // Clear any existing highlights first
+    this.highlightSystem.clearHighlights();
+    
+    // Priority 1: Task guidance (if present and valid)
+    if (data.taskGuidance && data.taskGuidance.nextStep?.selector) {
+      this.showTaskGuidance(data.taskGuidance);
+      this.logMessage('info', 'Showing task guidance UI');
+      return;
+    }
+    
+    // Priority 2: Intelligent focus suggestions (if no task guidance)
+    if (data.suggestions && data.suggestions.length > 0) {
+      this.showIntelligentFocus(data.suggestions);
+      this.logMessage('info', `Showing ${data.suggestions.length} intelligent focus suggestions`);
+      return;
+    }
+    
+    // No valid prediction data
+    this.logMessage('warning', 'No valid prediction data received');
   }
 
   /**
