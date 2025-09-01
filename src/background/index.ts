@@ -7,6 +7,7 @@ import { MessageRouter } from './services/MessageRouter';
 import { StateManager } from './services/StateManager';
 import { DataStorage } from './services/DataStorage';
 import { MLService } from './services/MLService';
+import { PluginSystemAdapter } from './PluginSystemAdapter';
 
 // Browser API compatibility using webextension-polyfill
 declare var browser: any; // webextension-polyfill provides this globally
@@ -19,6 +20,7 @@ let messageRouter: MessageRouter;
 let stateManager: StateManager;
 let dataStorage: DataStorage;
 let mlService: MLService;
+let pluginSystem: PluginSystemAdapter;
 
 // Initialize all services
 async function initializeServices(): Promise<void> {
@@ -57,6 +59,10 @@ async function initializeServices(): Promise<void> {
     
     // MLService放在最后创建，确保状态监听器已经设置好
     mlService = new MLService(stateManager, dataStorage);
+    
+    // Initialize plugin system after all core services are ready
+    pluginSystem = new PluginSystemAdapter();
+    await pluginSystem.initialize(messageRouter, stateManager, dataStorage, mlService);
     
     // Initialize floating control center on all tabs
     setTimeout(async () => {
@@ -227,23 +233,25 @@ async function handleSynapseEvent(message: any, _sender: any): Promise<void> {
       // Forward to ML service
       await mlService.processEvent(message);
       
+      // Process through plugin system (non-blocking)
+      if (pluginSystem && pluginSystem.isInitialized()) {
+        pluginSystem.processEvent(message).catch(error => {
+          console.warn('[Background] Plugin system processing error:', error);
+        });
+      }
+      
       // Broadcast to connected clients
       messageRouter.broadcast('popup', {
         type: 'eventAdded',
         data: message
       });
 
-      // Get latest prediction and handle task guidance
+      // Get latest prediction and send unified update
       try {
         const prediction = await mlService.getPrediction();
         
-        // Check if we have task guidance
-        if (prediction.taskGuidance) {
-          await handleTaskGuidance(message, prediction.taskGuidance);
-        } else {
-          // Regular intelligent focus prediction
-          await handleIntelligentFocus(prediction);
-        }
+        // Send unified prediction update (handles both task guidance and intelligent focus)
+        await handlePredictionUpdate(message, prediction);
         
         messageRouter.broadcast('popup', {
           type: 'predictionUpdate',
@@ -256,7 +264,7 @@ async function handleSynapseEvent(message: any, _sender: any): Promise<void> {
       
       // Check if training is needed
       const sequence = await dataStorage.getSequence('globalActionSequence');
-      if (sequence.length % 50 === 0 && sequence.length >= 20) {
+      if (sequence.length % 20 === 0 && sequence.length >= 20) {
         try {
           await mlService.trainModel();
           console.log('[Background] Model training completed');
@@ -297,66 +305,11 @@ async function handleSynapseEvent(message: any, _sender: any): Promise<void> {
   }
 }
 
-// Task guidance handling
-async function handleTaskGuidance(
+// Unified prediction handling - sends single PREDICTION_UPDATE message
+async function handlePredictionUpdate(
   _currentEvent: SynapseEvent, 
-  taskGuidance: {
-    taskId: string;
-    currentStep: number;
-    totalSteps: number;
-    nextStep: TaskStep;
-  }
+  prediction: any
 ): Promise<void> {
-  try {
-    // Check if this is a new task or continuing existing one
-    const activeTask = stateManager.getActiveTask();
-    
-    if (!activeTask || activeTask.taskId !== taskGuidance.taskId) {
-      // Start new task
-      const newTask: TaskState = {
-        taskId: taskGuidance.taskId,
-        taskName: `Task Sequence ${taskGuidance.totalSteps} steps`,
-        currentStep: taskGuidance.currentStep,
-        totalSteps: taskGuidance.totalSteps,
-        steps: [taskGuidance.nextStep], // We only have next step info
-        startedAt: Date.now(),
-        lastActionAt: Date.now(),
-        isActive: true
-      };
-      
-      stateManager.setActiveTask(newTask);
-      console.log('[Background] Started new task:', taskGuidance.taskId);
-    } else {
-      // Update existing task
-      stateManager.updateTaskStep(taskGuidance.currentStep);
-      console.log('[Background] Updated task step:', taskGuidance.currentStep);
-    }
-
-    // Send task guidance to content scripts
-    const tabs = await browser.tabs.query({});
-    tabs.forEach((tab: any) => {
-      if (tab.id) {
-        browser.tabs.sendMessage(tab.id, { 
-          type: 'TASK_PATH_GUIDANCE',
-          data: {
-            taskId: taskGuidance.taskId,
-            currentStep: taskGuidance.currentStep,
-            totalSteps: taskGuidance.totalSteps,
-            nextStep: taskGuidance.nextStep,
-            isTaskGuidance: true
-          }
-        }).catch(() => {
-          // Tab might not have content script, ignore
-        });
-      }
-    });
-
-  } catch (error) {
-    console.error('[Background] Error handling task guidance:', error);
-  }
-}
-
-async function handleIntelligentFocus(prediction: any): Promise<void> {
   try {
     // Clean up timed out tasks
     if (stateManager.isTaskTimedOut()) {
@@ -364,25 +317,50 @@ async function handleIntelligentFocus(prediction: any): Promise<void> {
       console.log('[Background] Task timed out and completed');
     }
 
-    // Send regular intelligent focus to content scripts
+    // If we have task guidance, handle task state management
+    if (prediction.taskGuidance) {
+      const taskGuidance = prediction.taskGuidance;
+      const activeTask = stateManager.getActiveTask();
+      
+      if (!activeTask || activeTask.taskId !== taskGuidance.taskId) {
+        // Start new task
+        const newTask: TaskState = {
+          taskId: taskGuidance.taskId,
+          taskName: `Task Sequence ${taskGuidance.totalSteps} steps`,
+          currentStep: taskGuidance.currentStep,
+          totalSteps: taskGuidance.totalSteps,
+          steps: [taskGuidance.nextStep], // We only have next step info
+          startedAt: Date.now(),
+          lastActionAt: Date.now(),
+          isActive: true
+        };
+        
+        stateManager.setActiveTask(newTask);
+        console.log('[Background] Started new task:', taskGuidance.taskId);
+      } else {
+        // Update existing task
+        stateManager.updateTaskStep(taskGuidance.currentStep);
+        console.log('[Background] Updated task step:', taskGuidance.currentStep);
+      }
+    }
+
+    // Send unified prediction update to content scripts
     const tabs = await browser.tabs.query({});
     tabs.forEach((tab: any) => {
       if (tab.id) {
         browser.tabs.sendMessage(tab.id, { 
-          type: 'INTELLIGENT_FOCUS_SUGGESTION',
-          data: {
-            suggestions: prediction.suggestions || [],
-            confidence: prediction.confidence * 100,
-            isTaskGuidance: false
-          }
+          type: 'PREDICTION_UPDATE',
+          data: prediction
         }).catch(() => {
           // Tab might not have content script, ignore
         });
       }
     });
 
+    console.log('[Background] Sent unified prediction update:', prediction.taskGuidance ? 'task guidance' : 'intelligent focus');
+
   } catch (error) {
-    console.error('[Background] Error handling intelligent focus:', error);
+    console.error('[Background] Error handling prediction update:', error);
   }
 }
 

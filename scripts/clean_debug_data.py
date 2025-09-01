@@ -33,10 +33,11 @@ class SynapseDataCleaner:
         }
         
         # 根据事件类型提取特定特征
-        if event['type'].startswith('user_action_'):
+        event_type = event['type']
+        if event_type.startswith('user.') or event_type.startswith('ui.'):
             user_features = self._extract_user_action_features(event)
             base_features.update(user_features)
-        elif event['type'].startswith('browser_action_'):
+        elif event_type.startswith('browser.'):
             browser_features = self._extract_browser_action_features(event)
             base_features.update(browser_features)
             
@@ -50,8 +51,17 @@ class SynapseDataCleaner:
         # 增加对modifier_keys的处理
         modifier_keys = payload.get('modifier_keys', [])
         
+        # Extract action subtype from new event format
+        event_type = event['type']
+        if event_type.startswith('user.'):
+            action_subtype = event_type.replace('user.', '')
+        elif event_type.startswith('ui.'):
+            action_subtype = event_type.replace('ui.', '')
+        else:
+            action_subtype = event_type
+        
         base_features = {
-            'action_subtype': event['type'].replace('user_action_', ''),
+            'action_subtype': action_subtype,
             'element_role': features.get('element_role'),
             'element_text': str(features.get('element_text', ''))[:100],
             'is_nav_link': features.get('is_nav_link'),
@@ -65,15 +75,15 @@ class SynapseDataCleaner:
             'is_ctrl_key': 'ctrl' in modifier_keys,
             'is_shift_key': 'shift' in modifier_keys,
             'is_alt_key': 'alt' in modifier_keys,
-            'key_char': payload.get('key') if event['type'] == 'user_action_keydown' else None,
-            'input_duration': payload.get('duration') if event['type'] == 'user_action_text_input' else None,
-            'input_method': payload.get('input_method') if event['type'] == 'user_action_text_input' else None
+            'key_char': payload.get('key') if event_type == 'user.keydown' else None,
+            'input_duration': payload.get('duration') if event_type == 'user.text_input' else None,
+            'input_method': payload.get('input_method') if event_type == 'user.text_input' else None
         }
         
         # 特定事件类型的额外特征提取
         event_type = event.get('type', '')
         
-        if event_type == 'user_action_mouse_pattern':
+        if event_type == 'ui.mouse_pattern':
             # 鼠标模式特征
             trail = payload.get('trail', [])
             base_features.update({
@@ -85,7 +95,7 @@ class SynapseDataCleaner:
                 'mouse_significance': features.get('significance')
             })
             
-        elif event_type == 'user_action_scroll':
+        elif event_type == 'user.scroll':
             # 滚动特征
             base_features.update({
                 'scroll_direction': features.get('scroll_direction'),
@@ -95,7 +105,7 @@ class SynapseDataCleaner:
                 'viewport_height': features.get('viewport_height')
             })
             
-        elif event_type == 'user_action_form_submit':
+        elif event_type == 'user.form_submit':
             # 表单提交特征
             base_features.update({
                 'form_selector': payload.get('form_selector'),
@@ -104,7 +114,7 @@ class SynapseDataCleaner:
                 'submit_method': payload.get('submit_method')
             })
             
-        elif event_type == 'user_action_focus_change':
+        elif event_type == 'ui.focus_change':
             # 焦点变化特征
             base_features.update({
                 'focus_type': payload.get('focus_type'),
@@ -112,7 +122,19 @@ class SynapseDataCleaner:
                 'to_selector': payload.get('to_selector')
             })
             
-        elif event_type == 'user_action_page_visibility':
+        elif event_type == 'ui.clipboard':
+            # 剪贴板操作特征 - NEW: 支持ClipboardEnhancerPlugin
+            clipboard_context = event.get('context', {}).get('clipboardContext', {})
+            base_features.update({
+                'clipboard_operation': features.get('operation'),
+                'clipboard_text_length': features.get('text_length'),
+                'clipboard_has_formatting': features.get('has_formatting'),
+                'clipboard_source_url': clipboard_context.get('sourceUrl'),
+                'clipboard_source_title': clipboard_context.get('sourceTitle'),
+                'clipboard_source_selector': clipboard_context.get('sourceSelector')
+            })
+            
+        elif event_type == 'browser.page_visibility':
             # 页面可见性特征
             base_features.update({
                 'visibility_state': payload.get('visibility_state'),
@@ -120,13 +142,13 @@ class SynapseDataCleaner:
                 'time_on_page': features.get('time_on_page')
             })
             
-        elif event_type == 'user_action_mouse_hover':
+        elif event_type == 'ui.mouse_hover':
             # 鼠标悬停特征
             base_features.update({
                 'hover_duration': payload.get('hover_duration')
             })
             
-        elif event_type == 'user_action_clipboard':
+        elif event_type == 'user.clipboard':
             # 剪贴板特征
             base_features.update({
                 'clipboard_operation': payload.get('operation'),
@@ -138,8 +160,15 @@ class SynapseDataCleaner:
     
     def _extract_browser_action_features(self, event: Dict[str, Any]) -> Dict[str, Any]:
         """提取浏览器行为特征"""
-        return {
-            'action_subtype': event['type'].replace('browser_action_', ''),
+        # Extract action subtype from new browser event format
+        event_type = event['type']
+        action_subtype = event_type.replace('browser.', '') if event_type.startswith('browser.') else event_type
+        
+        context = event.get('context', {})
+        payload = event.get('payload', {})
+        
+        base_features = {
+            'action_subtype': action_subtype,
             'element_role': None,
             'element_text': None,
             'is_nav_link': None,
@@ -150,6 +179,18 @@ class SynapseDataCleaner:
             'y_coord': None,
             'selector': None,
         }
+        
+        # NEW: 支持WorkflowClonerPlugin的跨Tab事件关联
+        if event_type in ['browser.tab.created', 'browser.tab.activated', 'browser.tab.updated']:
+            base_features.update({
+                'parent_tab_id': context.get('parentTabId'),
+                'is_new_tab_event': context.get('isNewTabEvent', False),
+                'tab_creation_trigger': payload.get('trigger_selector') if event_type == 'browser.tab.created' else None,
+                'tab_switch_reason': payload.get('switch_reason') if event_type == 'browser.tab.activated' else None,
+                'cross_tab_correlation': True if context.get('parentTabId') else False
+            })
+            
+        return base_features
     
     def clean_events(self):
         """清洗事件数据"""
@@ -189,18 +230,18 @@ class SynapseDataCleaner:
             } if 'datetime' in df.columns else None,
             # 特定事件类型统计
             'mouse_pattern_stats': {
-                'total_mouse_patterns': len(df[df['event_type'] == 'user_action_mouse_pattern']),
+                'total_mouse_patterns': len(df[df['event_type'] == 'ui.mouse_pattern']),
                 'pattern_types': df[df['mouse_pattern_type'].notna()]['mouse_pattern_type'].value_counts().to_dict() if 'mouse_pattern_type' in df.columns else {}
             },
             'scroll_stats': {
-                'total_scrolls': len(df[df['event_type'] == 'user_action_scroll']),
+                'total_scrolls': len(df[df['event_type'] == 'user.scroll']),
                 'scroll_directions': df[df['scroll_direction'].notna()]['scroll_direction'].value_counts().to_dict() if 'scroll_direction' in df.columns else {}
             },
             'form_submit_stats': {
-                'total_form_submits': len(df[df['event_type'] == 'user_action_form_submit'])
+                'total_form_submits': len(df[df['event_type'] == 'user.form_submit'])
             },
             'clipboard_stats': {
-                'total_clipboard_actions': len(df[df['event_type'] == 'user_action_clipboard']),
+                'total_clipboard_actions': len(df[df['event_type'] == 'user.clipboard']),
                 'clipboard_operations': df[df['clipboard_operation'].notna()]['clipboard_operation'].value_counts().to_dict() if 'clipboard_operation' in df.columns else {}
             }
         }

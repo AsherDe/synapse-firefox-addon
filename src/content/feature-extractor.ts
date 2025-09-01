@@ -10,6 +10,29 @@ export function getCssSelector(el: HTMLElement): string {
     return 'unknown';
   }
 
+  // Helper function to check if element is interactive
+  function isInteractiveElement(element: Element): boolean {
+    const tagName = element.tagName.toLowerCase();
+    const role = element.getAttribute('role');
+    
+    // Direct interactive tags
+    if (['a', 'button', 'input', 'textarea', 'select'].includes(tagName)) {
+      return true;
+    }
+    
+    // Interactive roles
+    if (role && ['button', 'link', 'textbox', 'checkbox', 'radio', 'tab', 'option'].includes(role)) {
+      return true;
+    }
+    
+    // Elements with click handlers or tabindex
+    if (element.hasAttribute('onclick') || element.hasAttribute('tabindex')) {
+      return true;
+    }
+    
+    return false;
+  }
+
   const selectorParts: string[] = [];
   let currentElement = el as Element;
   let depth = 0;
@@ -18,15 +41,18 @@ export function getCssSelector(el: HTMLElement): string {
   while (currentElement && currentElement !== document.body && depth < maxDepth) {
     let selector = '';
 
+    // Priority 1: Test IDs (most stable)
     const testId = currentElement.getAttribute('data-testid') || currentElement.getAttribute('data-test');
     if (testId) {
       return `[data-testid="${testId}"]`;
     }
 
-    if (currentElement.id) {
+    // Priority 2: Unique IDs 
+    if (currentElement.id && !currentElement.id.match(/^(mw-|content-|main|wrapper)/)) {
       return `#${currentElement.id}`;
     }
 
+    // Priority 3: Accessible attributes
     const ariaLabel = currentElement.getAttribute('aria-label');
     const role = currentElement.getAttribute('role');
     const name = currentElement.getAttribute('name');
@@ -62,6 +88,25 @@ export function getCssSelector(el: HTMLElement): string {
     }
 
     selectorParts.unshift(selector);
+
+    // STOP if we've found a good interactive element and have at least one selector
+    if (isInteractiveElement(currentElement) && selectorParts.length > 0) {
+      // For the first element (the actual target), always include it
+      if (depth === 0) {
+        currentElement = currentElement.parentElement as Element;
+        depth++;
+        continue;
+      }
+      // For parent elements, stop at interactive elements to avoid over-broad selectors
+      break;
+    }
+
+    // STOP if we hit common content containers that are too broad
+    const broadContainers = ['mw-content-text', 'content', 'main', 'article', 'section'];
+    if (currentElement.id && broadContainers.some(id => currentElement.id.includes(id))) {
+      break;
+    }
+    
     currentElement = currentElement.parentElement as Element;
     depth++;
   }

@@ -1,4 +1,4 @@
-import { createSynapseEvent } from '../feature-extractor';
+import { createSynapseEvent, getCssSelector } from '../feature-extractor';
 import { sendToBackground, EventThrottler } from '../../shared/utils';
 
 const eventThrottler = new EventThrottler();
@@ -9,13 +9,28 @@ export function setupClipboardMonitoring(): void {
     
     eventThrottler.throttleEvent(event, () => {
       const selection = window.getSelection();
+      const selectedText = selection ? selection.toString() : '';
       const hasFormatting = selection && selection.toString() !== selection.toString();
+      
+      // Enhanced clipboard context capture
+      const clipboardContext = {
+        sourceUrl: window.location.href,
+        sourceTitle: document.title,
+        sourceSelector: target ? getCssSelector(target) : undefined,
+        copiedText: selectedText.substring(0, 500), // Limit size
+        timestamp: Date.now()
+      };
       
       const synapseEvent = createSynapseEvent('ui.clipboard', target, event, {
         operation: 'copy',
-        text_length: selection ? selection.toString().length : 0,
-        has_formatting: hasFormatting || false
+        text_length: selectedText.length,
+        has_formatting: hasFormatting || false,
+        copied_text: selectedText.substring(0, 100), // Shorter version for features
+        source_context: clipboardContext
       });
+
+      // Add clipboard context to event context
+      synapseEvent.context.clipboardContext = clipboardContext;
 
       sendToBackground(synapseEvent);
     });

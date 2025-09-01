@@ -251,4 +251,104 @@ export class StateManager {
     const timeout = 30 * 1000; // 30 seconds
     return Date.now() - activeTask.lastActionAt > timeout;
   }
+
+  // Clipboard context management convenience methods
+  
+  /**
+   * Set clipboard context with enhanced metadata
+   */
+  setClipboardContext(context: any): void {
+    this.set('clipboardContext', {
+      ...context,
+      cached_at: Date.now()
+    });
+  }
+
+  /**
+   * Get current clipboard context if still fresh
+   */
+  getClipboardContext(): any | null {
+    const context = this.get('clipboardContext');
+    if (!context) return null;
+    
+    const CONTEXT_EXPIRY = 5 * 60 * 1000; // 5 minutes
+    if (Date.now() - context.cached_at > CONTEXT_EXPIRY) {
+      this.delete('clipboardContext');
+      return null;
+    }
+    
+    return context;
+  }
+
+  /**
+   * Check if clipboard context is available and fresh
+   */
+  hasClipboardContext(): boolean {
+    return this.getClipboardContext() !== null;
+  }
+
+  /**
+   * Clear expired clipboard context
+   */
+  clearExpiredClipboardContext(): void {
+    const context = this.get('clipboardContext');
+    if (context) {
+      const CONTEXT_EXPIRY = 5 * 60 * 1000; // 5 minutes
+      if (Date.now() - context.cached_at > CONTEXT_EXPIRY) {
+        this.delete('clipboardContext');
+      }
+    }
+  }
+
+  /**
+   * Update clipboard context usage statistics
+   */
+  updateClipboardUsage(contextId: string): void {
+    const context = this.getClipboardContext();
+    if (context && context.id === contextId) {
+      context.usage_count = (context.usage_count || 0) + 1;
+      context.last_used = Date.now();
+      this.setClipboardContext(context);
+    }
+  }
+
+  // Workflow state management enhancements
+  
+  /**
+   * Set active workflow execution state
+   */
+  setActiveWorkflow(workflow: any): void {
+    this.set('activeWorkflow', workflow);
+  }
+
+  /**
+   * Get active workflow execution state
+   */
+  getActiveWorkflow(): any | null {
+    return this.get('activeWorkflow') || null;
+  }
+
+  /**
+   * Complete active workflow
+   */
+  completeActiveWorkflow(): void {
+    const workflow = this.getActiveWorkflow();
+    if (workflow) {
+      workflow.completed_at = Date.now();
+      workflow.is_active = false;
+      this.set('completedWorkflows', [
+        ...(this.get('completedWorkflows') || []).slice(-9), // Keep last 10
+        workflow
+      ]);
+      this.delete('activeWorkflow');
+    }
+  }
+
+  /**
+   * Check if workflow is currently active
+   */
+  isWorkflowActive(): boolean {
+    const workflow = this.getActiveWorkflow();
+    return workflow !== null && workflow.is_active === true;
+  }
 }
