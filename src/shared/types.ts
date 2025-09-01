@@ -27,6 +27,19 @@ export interface SynapseEvent {
     windowId: number | null;
     url: string; // Normalized URL
     title: string;
+    
+    // Cross-tab relationship tracking for workflow automation
+    parentTabId?: number | null;
+    isNewTabEvent?: boolean;
+    
+    // Clipboard context for enhanced paste suggestions
+    clipboardContext?: {
+      sourceUrl?: string;
+      sourceTitle?: string;
+      sourceSelector?: string;
+      copiedText?: string;
+      timestamp?: number;
+    };
   };
 
   // All event payload should fit into this structure
