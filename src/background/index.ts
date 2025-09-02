@@ -230,21 +230,161 @@ async function broadcastCompleteDataSnapshot(port?: any): Promise<void> {
   }
 }
 
-// Set up periodic idle analysis
+// Enhanced idle analysis with intelligent triggers
 function setupIdleAnalysis(): void {
-  // Run idle analysis every 5 minutes
+  let lastIdleCheckTime = Date.now();
+  let consecutiveIdleChecks = 0;
+  
+  // Primary idle analysis - every 5 minutes
   setInterval(async () => {
     try {
-      // Only run if we have LLM permission
-      if (await llmService.hasPermission()) {
-        await llmService.processIdleAnalysis();
+      // Check if browser is actually idle
+      const idleState = await browser.idle.queryState(300); // 5 minutes
+      const isIdle = idleState === 'idle';
+      
+      if (isIdle) {
+        consecutiveIdleChecks++;
+        console.log('[Background] Browser idle detected, consecutive checks:', consecutiveIdleChecks);
+        
+        // Only run LLM analysis if we have permission and difficult sequences
+        if (await llmService.hasPermission()) {
+          const difficultSequences = stateManager.get('difficultSequences') || [];
+          if (difficultSequences.length > 0) {
+            await llmService.processIdleAnalysis();
+            console.log('[Background] LLM analysis completed during idle period');
+          }
+        }
+        
+        // Progressive analysis based on idle duration
+        if (consecutiveIdleChecks >= 2) { // 10+ minutes idle
+          await performDeepAnalysis();
+        }
+      } else {
+        consecutiveIdleChecks = 0;
       }
+      
+      lastIdleCheckTime = Date.now();
     } catch (error) {
       console.warn('[Background] Idle analysis failed:', error instanceof Error ? error.message : String(error));
     }
   }, 5 * 60 * 1000); // 5 minutes
   
-  console.log('[Background] Idle analysis scheduled every 5 minutes');
+  // Secondary trigger - based on difficulty accumulation
+  setInterval(async () => {
+    try {
+      const difficultSequences = stateManager.get('difficultSequences') || [];
+      
+      // Trigger analysis when we accumulate many difficult sequences
+      if (difficultSequences.length >= 10) {
+        const idleState = await browser.idle.queryState(120); // 2 minutes
+        if (idleState === 'idle' && await llmService.hasPermission()) {
+          console.log('[Background] Triggering analysis due to difficulty accumulation');
+          await llmService.processIdleAnalysis();
+        }
+      }
+    } catch (error) {
+      console.warn('[Background] Difficulty-based trigger failed:', error instanceof Error ? error.message : String(error));
+    }
+  }, 2 * 60 * 1000); // 2 minutes
+  
+  console.log('[Background] Enhanced idle analysis system initialized');
+}
+
+// Deep analysis for extended idle periods
+async function performDeepAnalysis(): Promise<void> {
+  try {
+    console.log('[Background] Starting deep analysis during extended idle period');
+    
+    // Analyze plugin patterns for rule extraction
+    if (pluginSystem && pluginSystem.isInitialized()) {
+      const workflowPatterns = stateManager.get('workflowPatterns') || [];
+      if (workflowPatterns.length > 0) {
+        try {
+          const ruleExtractionResult = await llmService.extractWorkflowRules(workflowPatterns);
+          if (ruleExtractionResult.success) {
+            stateManager.set('extractedRules', {
+              timestamp: Date.now(),
+              rules: ruleExtractionResult.result,
+              confidence: ruleExtractionResult.confidence
+            });
+            console.log('[Background] Workflow rules extracted successfully');
+          }
+        } catch (error) {
+          console.warn('[Background] Rule extraction failed:', error);
+        }
+      }
+    }
+    
+    // Generate synthetic training data from analyzed patterns
+    const llmResults = stateManager.get('llmAnalysisResults');
+    if (llmResults && llmResults.results.length > 0) {
+      await generateSyntheticTrainingData(llmResults.results);
+    }
+    
+  } catch (error) {
+    console.error('[Background] Deep analysis failed:', error);
+  }
+}
+
+// Generate synthetic training data from LLM insights
+async function generateSyntheticTrainingData(analysisResults: any[]): Promise<void> {
+  try {
+    console.log('[Background] Generating synthetic training data from LLM insights');
+    
+    const syntheticData = [];
+    
+    for (const result of analysisResults.slice(0, 3)) { // Limit to prevent overload
+      if (result.confidence > 0.7) { // Only use high-confidence results
+        // Create augmented sequences based on LLM intent classification
+        const baseSequence = result.sequence;
+        const intent = result.intent;
+        
+        // Generate variations of the sequence
+        for (let i = 0; i < 2; i++) { // 2 variations per high-confidence sequence
+          const synthetic = {
+            sequence: baseSequence.map((event: any) => ({
+              ...event,
+              timestamp: Date.now() + i * 1000, // Slight time variations
+              payload: {
+                ...event.payload,
+                features: {
+                  ...event.payload.features,
+                  llmIntent: intent, // Add LLM-derived intent as feature
+                  synthetic: true
+                }
+              }
+            })),
+            intent: intent,
+            confidence: result.confidence,
+            source: 'llm_augmentation'
+          };
+          
+          syntheticData.push(synthetic);
+        }
+      }
+    }
+    
+    // Store synthetic data for ML Worker training
+    if (syntheticData.length > 0) {
+      stateManager.set('syntheticTrainingData', {
+        timestamp: Date.now(),
+        data: syntheticData,
+        count: syntheticData.length
+      });
+      
+      console.log(`[Background] Generated ${syntheticData.length} synthetic training samples`);
+      
+      // Notify ML service about new synthetic data available
+      try {
+        await mlService.processSyntheticTrainingData(syntheticData);
+      } catch (error) {
+        console.warn('[Background] Failed to process synthetic data:', error);
+      }
+    }
+    
+  } catch (error) {
+    console.error('[Background] Synthetic data generation failed:', error);
+  }
 }
 
 // Enhanced event handler to collect difficult sequences for LLM analysis
