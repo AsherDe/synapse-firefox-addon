@@ -12,6 +12,7 @@ import { MessageRouter } from './services/MessageRouter';
 import { StateManager } from './services/StateManager';
 import { DataStorage } from './services/DataStorage';
 import { MLService } from './services/MLService';
+import { LLMService } from './services/LLMService';
 import { SynapseEvent } from '../shared/types';
 
 export class PluginSystemAdapter {
@@ -29,7 +30,8 @@ export class PluginSystemAdapter {
     messageRouter: MessageRouter,
     stateManager: StateManager,
     dataStorage: DataStorage,
-    mlService: MLService
+    mlService: MLService,
+    llmService?: LLMService
   ): Promise<void> {
     
     if (this.initialized) {
@@ -45,7 +47,8 @@ export class PluginSystemAdapter {
         stateManager,
         dataStorage,
         messageRouter,
-        mlWorker: mlService // Use MLService as worker interface
+        mlWorker: mlService, // Use MLService as worker interface
+        llmService
       };
       
       this.registry.setContext(context);
@@ -169,6 +172,66 @@ export class PluginSystemAdapter {
     return this.registry.getPlugin(pluginId);
   }
   
+  // LLM Integration - Apply insights to all plugins
+  async applyLLMInsightsToPlugins(insights: Array<{pattern: string, intent: string, confidence: number}>): Promise<void> {
+    if (!this.initialized) {
+      console.warn('[PluginSystemAdapter] Cannot apply LLM insights - system not initialized');
+      return;
+    }
+
+    console.log(`[PluginSystemAdapter] Applying ${insights.length} LLM insights to all plugins`);
+
+    const plugins = this.registry.getAllPlugins();
+    
+    for (const plugin of plugins) {
+      if (plugin.applyLLMInsights) {
+        try {
+          await plugin.applyLLMInsights(insights);
+          console.log(`[PluginSystemAdapter] Applied LLM insights to plugin: ${plugin.name}`);
+        } catch (error) {
+          console.error(`[PluginSystemAdapter] Failed to apply LLM insights to ${plugin.name}:`, error);
+        }
+      }
+    }
+
+    console.log(`[PluginSystemAdapter] Completed applying LLM insights to ${plugins.length} plugins`);
+  }
+
+  // Generate LLM rules from all plugins
+  async generateLLMRulesFromPlugins(): Promise<any[]> {
+    if (!this.initialized) {
+      console.warn('[PluginSystemAdapter] Cannot generate LLM rules - system not initialized');
+      return [];
+    }
+
+    console.log('[PluginSystemAdapter] Generating LLM rules from all plugins');
+
+    const allRules = [];
+    const plugins = this.registry.getAllPlugins();
+
+    for (const plugin of plugins) {
+      if (plugin.generateLLMRules) {
+        try {
+          const rules = await plugin.generateLLMRules();
+          allRules.push({
+            plugin: plugin.name,
+            pluginId: plugin.id,
+            rules: rules,
+            timestamp: Date.now()
+          });
+          console.log(`[PluginSystemAdapter] Generated ${rules.length} rules from plugin: ${plugin.name}`);
+        } catch (error) {
+          console.error(`[PluginSystemAdapter] Failed to generate rules from ${plugin.name}:`, error);
+        }
+      }
+    }
+
+    const totalRules = allRules.reduce((sum, plugin) => sum + plugin.rules.length, 0);
+    console.log(`[PluginSystemAdapter] Generated ${totalRules} total LLM rules from ${plugins.length} plugins`);
+
+    return allRules;
+  }
+
   // Cleanup for shutdown
   async cleanup(): Promise<void> {
     if (this.initialized) {

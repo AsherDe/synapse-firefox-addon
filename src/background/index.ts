@@ -67,7 +67,7 @@ async function initializeServices(): Promise<void> {
     
     // Initialize plugin system after all core services are ready
     pluginSystem = new PluginSystemAdapter();
-    await pluginSystem.initialize(messageRouter, stateManager, dataStorage, mlService);
+    await pluginSystem.initialize(messageRouter, stateManager, dataStorage, mlService, llmService);
     
     // Initialize floating control center on all tabs
     setTimeout(async () => {
@@ -155,6 +155,12 @@ function setupMessageHandlers(): void {
     'analyzeBehaviorSequence': handleAnalyzeBehaviorSequenceMessage,
     'extractWorkflowRules': handleExtractWorkflowRulesMessage,
     
+    // LLM Control operations
+    'toggleLLMEnabled': handleToggleLLMEnabledMessage,
+    'setLLMAnalysisEnabled': handleSetLLMAnalysisEnabledMessage,
+    'setLLMPluginIntegration': handleSetLLMPluginIntegrationMessage,
+    'getLLMSettings': handleGetLLMSettingsMessage,
+    
     // Floating control center messages
     'FLOATING_CONTROL_TOGGLE_MONITORING': handleFloatingControlToggleMonitoring,
     'FLOATING_CONTROL_EXPORT_DATA': handleFloatingControlExportData,
@@ -232,7 +238,6 @@ async function broadcastCompleteDataSnapshot(port?: any): Promise<void> {
 
 // Enhanced idle analysis with intelligent triggers
 function setupIdleAnalysis(): void {
-  let lastIdleCheckTime = Date.now();
   let consecutiveIdleChecks = 0;
   
   // Primary idle analysis - every 5 minutes
@@ -246,13 +251,15 @@ function setupIdleAnalysis(): void {
         consecutiveIdleChecks++;
         console.log('[Background] Browser idle detected, consecutive checks:', consecutiveIdleChecks);
         
-        // Only run LLM analysis if we have permission and difficult sequences
-        if (await llmService.hasPermission()) {
+        // Only run LLM analysis if enabled, has permission, and has difficult sequences
+        if (stateManager.isLLMAnalysisEnabled() && await llmService.hasPermission()) {
           const difficultSequences = stateManager.get('difficultSequences') || [];
           if (difficultSequences.length > 0) {
             await llmService.processIdleAnalysis();
             console.log('[Background] LLM analysis completed during idle period');
           }
+        } else if (!stateManager.isLLMEnabled()) {
+          console.log('[Background] LLM analysis skipped - LLM functionality disabled');
         }
         
         // Progressive analysis based on idle duration
@@ -262,8 +269,6 @@ function setupIdleAnalysis(): void {
       } else {
         consecutiveIdleChecks = 0;
       }
-      
-      lastIdleCheckTime = Date.now();
     } catch (error) {
       console.warn('[Background] Idle analysis failed:', error instanceof Error ? error.message : String(error));
     }
@@ -274,8 +279,8 @@ function setupIdleAnalysis(): void {
     try {
       const difficultSequences = stateManager.get('difficultSequences') || [];
       
-      // Trigger analysis when we accumulate many difficult sequences
-      if (difficultSequences.length >= 10) {
+      // Trigger analysis when we accumulate many difficult sequences (only if LLM enabled)
+      if (difficultSequences.length >= 10 && stateManager.isLLMAnalysisEnabled()) {
         const idleState = await browser.idle.queryState(120); // 2 minutes
         if (idleState === 'idle' && await llmService.hasPermission()) {
           console.log('[Background] Triggering analysis due to difficulty accumulation');
@@ -295,30 +300,52 @@ async function performDeepAnalysis(): Promise<void> {
   try {
     console.log('[Background] Starting deep analysis during extended idle period');
     
-    // Analyze plugin patterns for rule extraction
+    // Step 1: Generate rules from all plugins
     if (pluginSystem && pluginSystem.isInitialized()) {
-      const workflowPatterns = stateManager.get('workflowPatterns') || [];
-      if (workflowPatterns.length > 0) {
-        try {
-          const ruleExtractionResult = await llmService.extractWorkflowRules(workflowPatterns);
+      try {
+        const pluginRules = await pluginSystem.generateLLMRulesFromPlugins();
+        if (pluginRules.length > 0) {
+          // Send plugin rules to LLM for analysis
+          const combinedRules = pluginRules.flatMap(plugin => plugin.rules);
+          const ruleExtractionResult = await llmService.extractWorkflowRules(combinedRules);
+          
           if (ruleExtractionResult.success) {
             stateManager.set('extractedRules', {
               timestamp: Date.now(),
               rules: ruleExtractionResult.result,
-              confidence: ruleExtractionResult.confidence
+              confidence: ruleExtractionResult.confidence,
+              pluginRules: pluginRules
             });
-            console.log('[Background] Workflow rules extracted successfully');
+            console.log('[Background] Plugin workflow rules extracted successfully');
           }
-        } catch (error) {
-          console.warn('[Background] Rule extraction failed:', error);
         }
+      } catch (error) {
+        console.warn('[Background] Plugin rule extraction failed:', error);
       }
     }
     
-    // Generate synthetic training data from analyzed patterns
+    // Step 2: Generate synthetic training data from analyzed patterns
     const llmResults = stateManager.get('llmAnalysisResults');
     if (llmResults && llmResults.results.length > 0) {
       await generateSyntheticTrainingData(llmResults.results);
+      
+      // Step 3: Apply LLM insights to plugin system (only if plugin integration enabled)
+      if (pluginSystem && pluginSystem.isInitialized() && stateManager.isLLMPluginIntegrationEnabled()) {
+        try {
+          const insights = llmResults.results.map((result: any) => ({
+            pattern: result.sequence.slice(-3).map((e: any) => e.type).join('->'),
+            intent: result.intent,
+            confidence: result.confidence
+          }));
+          
+          await pluginSystem.applyLLMInsightsToPlugins(insights);
+          console.log('[Background] Applied LLM insights to plugin system');
+        } catch (error) {
+          console.warn('[Background] Failed to apply LLM insights to plugins:', error);
+        }
+      } else if (!stateManager.isLLMPluginIntegrationEnabled()) {
+        console.log('[Background] LLM plugin integration skipped - feature disabled');
+      }
     }
     
   } catch (error) {
@@ -326,41 +353,32 @@ async function performDeepAnalysis(): Promise<void> {
   }
 }
 
-// Generate synthetic training data from LLM insights
+// Enhanced synthetic training data generation from LLM insights
 async function generateSyntheticTrainingData(analysisResults: any[]): Promise<void> {
   try {
-    console.log('[Background] Generating synthetic training data from LLM insights');
+    console.log('[Background] Generating enhanced synthetic training data from LLM insights');
     
     const syntheticData = [];
+    const llmInsights = [];
     
     for (const result of analysisResults.slice(0, 3)) { // Limit to prevent overload
-      if (result.confidence > 0.7) { // Only use high-confidence results
+      if (result.confidence > 0.6) { // Use reasonably confident results
+        // Create pattern signature for LLM insight tracking
+        const patternKey = result.sequence.slice(-3).map((e: any) => e.type).join('->');
+        
+        llmInsights.push({
+          pattern: patternKey,
+          intent: result.intent,
+          confidence: result.confidence
+        });
+        
         // Create augmented sequences based on LLM intent classification
         const baseSequence = result.sequence;
         const intent = result.intent;
         
-        // Generate variations of the sequence
-        for (let i = 0; i < 2; i++) { // 2 variations per high-confidence sequence
-          const synthetic = {
-            sequence: baseSequence.map((event: any) => ({
-              ...event,
-              timestamp: Date.now() + i * 1000, // Slight time variations
-              payload: {
-                ...event.payload,
-                features: {
-                  ...event.payload.features,
-                  llmIntent: intent, // Add LLM-derived intent as feature
-                  synthetic: true
-                }
-              }
-            })),
-            intent: intent,
-            confidence: result.confidence,
-            source: 'llm_augmentation'
-          };
-          
-          syntheticData.push(synthetic);
-        }
+        // Generate multiple variations with different augmentation strategies
+        const variations = await generateSequenceVariations(baseSequence, intent, result.confidence);
+        syntheticData.push(...variations);
       }
     }
     
@@ -369,26 +387,129 @@ async function generateSyntheticTrainingData(analysisResults: any[]): Promise<vo
       stateManager.set('syntheticTrainingData', {
         timestamp: Date.now(),
         data: syntheticData,
-        count: syntheticData.length
+        count: syntheticData.length,
+        source: 'enhanced_llm_augmentation'
       });
       
       console.log(`[Background] Generated ${syntheticData.length} synthetic training samples`);
       
-      // Notify ML service about new synthetic data available
+      // Apply LLM insights to ML Worker first
+      if (llmInsights.length > 0) {
+        try {
+          await mlService.applyLLMInsights(llmInsights);
+          console.log(`[Background] Applied ${llmInsights.length} LLM insights to ML Worker`);
+        } catch (error) {
+          console.warn('[Background] Failed to apply LLM insights:', error);
+        }
+      }
+      
+      // Then process synthetic training data
       try {
         await mlService.processSyntheticTrainingData(syntheticData);
+        console.log('[Background] Successfully processed synthetic training data');
+        
+        // Reset difficulty tracking after applying improvements
+        await mlService.resetDifficultyTracking();
+        
       } catch (error) {
         console.warn('[Background] Failed to process synthetic data:', error);
       }
     }
     
   } catch (error) {
-    console.error('[Background] Synthetic data generation failed:', error);
+    console.error('[Background] Enhanced synthetic data generation failed:', error);
   }
 }
 
+// Generate multiple variations of a sequence using different augmentation strategies
+async function generateSequenceVariations(baseSequence: any[], intent: string, confidence: number): Promise<any[]> {
+  const variations = [];
+  
+  // Strategy 1: Temporal variations (timing changes)
+  const temporalVariation = {
+    sequence: baseSequence.map((event: any, index: number) => ({
+      ...event,
+      timestamp: Date.now() + (index * 1500) + Math.random() * 500, // More realistic timing
+      payload: {
+        ...event.payload,
+        features: {
+          ...event.payload.features,
+          llmIntent: intent,
+          synthetic: true,
+          augmentationType: 'temporal'
+        }
+      }
+    })),
+    intent: intent,
+    confidence: confidence * 0.9, // Slightly lower confidence for synthetic data
+    source: 'temporal_augmentation'
+  };
+  variations.push(temporalVariation);
+  
+  // Strategy 2: Spatial variations (position changes)
+  const spatialVariation = {
+    sequence: baseSequence.map((event: any) => ({
+      ...event,
+      timestamp: Date.now() + Math.random() * 1000,
+      payload: {
+        ...event.payload,
+        // Add small spatial variations if position exists
+        ...(event.payload.position && {
+          position: {
+            x: Math.max(0, event.payload.position.x + (Math.random() - 0.5) * 20),
+            y: Math.max(0, event.payload.position.y + (Math.random() - 0.5) * 20)
+          }
+        }),
+        features: {
+          ...event.payload.features,
+          llmIntent: intent,
+          synthetic: true,
+          augmentationType: 'spatial'
+        }
+      }
+    })),
+    intent: intent,
+    confidence: confidence * 0.85,
+    source: 'spatial_augmentation'
+  };
+  variations.push(spatialVariation);
+  
+  // Strategy 3: Content variations (text changes)
+  if (confidence > 0.7) { // Only for high-confidence sequences
+    const contentVariation = {
+      sequence: baseSequence.map((event: any) => ({
+        ...event,
+        timestamp: Date.now() + Math.random() * 1000,
+        payload: {
+          ...event.payload,
+          // Vary text content slightly if it exists
+          ...(event.payload.value && typeof event.payload.value === 'string' && {
+            value: event.payload.value + (Math.random() > 0.5 ? '_v' : '_alt')
+          }),
+          features: {
+            ...event.payload.features,
+            // Vary text content in features
+            ...(event.payload.features?.textContent && {
+              textContent: event.payload.features.textContent + '_variant'
+            }),
+            llmIntent: intent,
+            synthetic: true,
+            augmentationType: 'content'
+          }
+        }
+      })),
+      intent: intent,
+      confidence: confidence * 0.8,
+      source: 'content_augmentation'
+    };
+    variations.push(contentVariation);
+  }
+  
+  return variations;
+}
+
 // Enhanced event handler to collect difficult sequences for LLM analysis
-async function collectDifficultSequence(event: SynapseEvent): Promise<void> {
+async function collectDifficultSequence(_event: SynapseEvent): Promise<void> {
   try {
     // Simple heuristic: consider sequences with low confidence or unusual patterns as "difficult"
     const lastPrediction = stateManager.get('lastPrediction');
@@ -1036,6 +1157,80 @@ initializeServices().catch(error => {
   console.error('[SYNAPSE BACKGROUND] Critical initialization error:', error);
 });
 
+
+// LLM Control message handlers
+async function handleToggleLLMEnabledMessage(): Promise<any> {
+  try {
+    const currentState = stateManager.isLLMEnabled();
+    stateManager.setLLMEnabled(!currentState);
+    
+    return { 
+      success: true, 
+      data: { 
+        enabled: !currentState,
+        message: `LLM functionality ${!currentState ? 'enabled' : 'disabled'}`
+      }
+    };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    return { success: false, error: errorMessage };
+  }
+}
+
+async function handleSetLLMAnalysisEnabledMessage(message: any): Promise<any> {
+  try {
+    const enabled = !!message.enabled;
+    stateManager.setLLMAnalysisEnabled(enabled);
+    
+    return { 
+      success: true, 
+      data: { 
+        analysisEnabled: enabled,
+        message: `LLM analysis ${enabled ? 'enabled' : 'disabled'}`
+      }
+    };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    return { success: false, error: errorMessage };
+  }
+}
+
+async function handleSetLLMPluginIntegrationMessage(message: any): Promise<any> {
+  try {
+    const enabled = !!message.enabled;
+    stateManager.setLLMPluginIntegrationEnabled(enabled);
+    
+    return { 
+      success: true, 
+      data: { 
+        pluginIntegrationEnabled: enabled,
+        message: `LLM plugin integration ${enabled ? 'enabled' : 'disabled'}`
+      }
+    };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    return { success: false, error: errorMessage };
+  }
+}
+
+async function handleGetLLMSettingsMessage(): Promise<any> {
+  try {
+    return {
+      success: true,
+      data: {
+        llmEnabled: stateManager.isLLMEnabled(),
+        llmAnalysisEnabled: stateManager.isLLMAnalysisEnabled(),
+        llmPluginIntegrationEnabled: stateManager.isLLMPluginIntegrationEnabled(),
+        permissionStatus: llmService.getPermissionStatus(),
+        serviceStatus: llmService.getStatus(),
+        hasPermission: await llmService.hasPermission()
+      }
+    };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    return { success: false, error: errorMessage };
+  }
+}
 
 // LLM Service message handlers
 async function handleGetLLMStatusMessage(): Promise<any> {

@@ -476,6 +476,70 @@ export class ClipboardEnhancerPlugin extends BasePlugin {
     }
   }
 
+  // LLM Integration - Enhanced clipboard intelligence
+  async applyLLMInsights(insights: Array<{pattern: string, intent: string, confidence: number}>): Promise<void> {
+    console.log(`[${this.name}] Applying ${insights.length} LLM insights to clipboard patterns`);
+    
+    for (const insight of insights) {
+      if (insight.confidence > 0.7) {
+        // Apply insights to improve clipboard context understanding
+        if (insight.intent.toLowerCase().includes('paste') || insight.intent.toLowerCase().includes('form')) {
+          // Store LLM-derived patterns for better paste suggestions
+          const llmRule = {
+            pattern: insight.pattern,
+            intent: insight.intent,
+            confidence: insight.confidence,
+            suggestedAction: this.derivePasteActionFromIntent(insight.intent),
+            timestamp: Date.now()
+          };
+          
+          this.context.stateManager.set(`clipboardLLMRule_${insight.pattern}`, llmRule);
+          console.log(`[${this.name}] Applied LLM rule for pattern "${insight.pattern}": ${insight.intent}`);
+        }
+      }
+    }
+  }
+
+  async generateLLMRules(): Promise<any[]> {
+    const rules = [];
+    
+    // Generate rules based on clipboard usage patterns
+    for (const [, context] of this.clipboardHistory) {
+      if (context.usageCount > 1) {
+        const rule = {
+          source: 'clipboard_pattern',
+          pattern: `copy-${context.sourceUrl}-paste`,
+          description: `Frequently copy from ${context.sourceTitle} and paste to input fields`,
+          frequency: context.usageCount,
+          lastUsed: context.lastUsed,
+          confidence: Math.min(0.9, context.usageCount * 0.2),
+          suggestedActions: context.suggestedActions.map(action => action.type)
+        };
+        
+        rules.push(rule);
+      }
+    }
+    
+    console.log(`[${this.name}] Generated ${rules.length} LLM rules from clipboard patterns`);
+    return rules;
+  }
+
+  private derivePasteActionFromIntent(intent: string): string {
+    const lowerIntent = intent.toLowerCase();
+    
+    if (lowerIntent.includes('email') || lowerIntent.includes('contact')) {
+      return 'format_email';
+    } else if (lowerIntent.includes('url') || lowerIntent.includes('link')) {
+      return 'format_link';
+    } else if (lowerIntent.includes('code') || lowerIntent.includes('snippet')) {
+      return 'format_code';
+    } else if (lowerIntent.includes('form') || lowerIntent.includes('input')) {
+      return 'smart_paste';
+    }
+    
+    return 'paste';
+  }
+
   async cleanup(): Promise<void> {
     await this.saveClipboardHistory();
     this.clipboardHistory.clear();
