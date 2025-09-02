@@ -161,6 +161,9 @@ function setupMessageHandlers(): void {
     'setLLMPluginIntegration': handleSetLLMPluginIntegrationMessage,
     'getLLMSettings': handleGetLLMSettingsMessage,
     
+    // Clipboard operations
+    'requestClipboardContext': handleRequestClipboardContextMessage,
+    
     // Floating control center messages
     'FLOATING_CONTROL_TOGGLE_MONITORING': handleFloatingControlToggleMonitoring,
     'FLOATING_CONTROL_EXPORT_DATA': handleFloatingControlExportData,
@@ -1235,6 +1238,32 @@ async function handleGetLLMSettingsMessage(): Promise<any> {
         serviceStatus: llmService.getStatus(),
         hasPermission: await llmService.hasPermission()
       }
+    };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    return { success: false, error: errorMessage };
+  }
+}
+
+// Clipboard message handlers
+async function handleRequestClipboardContextMessage(): Promise<any> {
+  try {
+    // Get clipboard context from ClipboardEnhancerPlugin if available
+    if (pluginSystem && pluginSystem.isInitialized()) {
+      const clipboardPlugin = pluginSystem.getPlugin('clipboard-enhancer');
+      if (clipboardPlugin && clipboardPlugin.getCurrentContext) {
+        const context = clipboardPlugin.getCurrentContext();
+        return { success: true, data: context };
+      }
+    }
+    
+    // Fallback: return basic clipboard info
+    return { 
+      success: true, 
+      data: { 
+        hasContext: false, 
+        message: 'No clipboard context available' 
+      } 
     };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
