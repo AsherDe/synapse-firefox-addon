@@ -107,6 +107,12 @@ class SynapseMLWorker {
   private discoveredTasks: Map<string, ActionSkill> = new Map();
   private sequencePatterns: Map<string, number> = new Map();
   
+  // Difficulty detection system - tracks prediction confidence and patterns
+  private predictionHistory: Array<{confidence: number, timestamp: number, sequence: SynapseEvent[]}> = [];
+  private lowConfidenceThreshold: number = 0.3;
+  private difficultPatterns: Map<string, number> = new Map();
+  private maxHistorySize: number = 100;
+  
   constructor() {
     console.log('[ML Worker] Initialized - ready to process clean SynapseEvents');
     this.initializeGRUModel();
@@ -455,11 +461,45 @@ class SynapseMLWorker {
   }
 
   /**
-   * GRU-based prediction with task path guidance support
+   * Track prediction difficulty and determine if sequence needs LLM analysis
+   */
+  private trackPredictionDifficulty(confidence: number, sequence: SynapseEvent[]): boolean {
+    const timestamp = Date.now();
+    
+    // Add to prediction history
+    this.predictionHistory.push({
+      confidence,
+      timestamp,
+      sequence: sequence.slice(-5) // Keep only last 5 events for context
+    });
+    
+    // Trim history to prevent memory bloat
+    if (this.predictionHistory.length > this.maxHistorySize) {
+      this.predictionHistory = this.predictionHistory.slice(-this.maxHistorySize);
+    }
+    
+    // Determine if this prediction is difficult
+    const isDifficult = confidence < this.lowConfidenceThreshold;
+    
+    if (isDifficult) {
+      // Track difficult pattern
+      const patternKey = sequence.slice(-3).map(e => e.type).join('->');
+      this.difficultPatterns.set(patternKey, (this.difficultPatterns.get(patternKey) || 0) + 1);
+      
+      console.log(`[ML Worker] Difficult sequence detected: confidence=${confidence.toFixed(3)}, pattern=${patternKey}`);
+    }
+    
+    return isDifficult;
+  }
+
+  /**
+   * GRU-based prediction with task path guidance support and difficulty detection
    */
   public async predict(currentSequence: SynapseEvent[]): Promise<{
     suggestions: OperationSuggestion[];
     reason?: string;
+    confidence?: number;
+    isDifficult?: boolean;
     taskGuidance?: {
       taskId: string;
       currentStep: number;
@@ -468,7 +508,7 @@ class SynapseMLWorker {
     };
   }> {
     if (!currentSequence || currentSequence.length === 0) {
-      return { suggestions: [], reason: 'no_input_sequence' };
+      return { suggestions: [], reason: 'no_input_sequence', confidence: 0, isDifficult: false };
     }
 
     try {
@@ -479,7 +519,9 @@ class SynapseMLWorker {
         .slice(-10);
 
       if (recentSelectors.length === 0) {
-        return { suggestions: [], reason: 'insufficient_context' };
+        const result = { suggestions: [], reason: 'insufficient_context', confidence: 0, isDifficult: true };
+        this.trackPredictionDifficulty(0, currentSequence);
+        return result;
       }
 
       // Check for task sequence match first
@@ -497,7 +539,10 @@ class SynapseMLWorker {
           };
 
           const suggestions = this.createTaskGuidanceSuggestions(nextStep, currentSequence);
-          return { suggestions, taskGuidance };
+          const confidence = 0.8; // High confidence for known task sequences
+          const isDifficult = this.trackPredictionDifficulty(confidence, currentSequence);
+          
+          return { suggestions, taskGuidance, confidence, isDifficult };
         }
       }
 
@@ -516,15 +561,31 @@ class SynapseMLWorker {
       // Combine predictions
       const allPredictions = [...new Set([...gruPredictions, ...frequencyPredictions])];
       
+      // Calculate confidence based on prediction quality
+      let confidence = 0;
       if (allPredictions.length === 0) {
-        return { suggestions: [], reason: 'low_confidence' };
+        confidence = 0;
+      } else {
+        confidence = Math.min(0.9, allPredictions.length * 0.2 + (gruPredictions.length > 0 ? 0.3 : 0));
       }
       
-      return { suggestions: this.createOperationSuggestions(allPredictions, currentSequence) };
+      // Track difficulty and get suggestions
+      const isDifficult = this.trackPredictionDifficulty(confidence, currentSequence);
+      
+      if (allPredictions.length === 0) {
+        return { suggestions: [], reason: 'low_confidence', confidence, isDifficult };
+      }
+      
+      return { 
+        suggestions: this.createOperationSuggestions(allPredictions, currentSequence),
+        confidence,
+        isDifficult
+      };
 
     } catch (error) {
       console.error('[ML Worker] Prediction error:', error);
-      return { suggestions: [], reason: 'prediction_error' };
+      this.trackPredictionDifficulty(0, currentSequence); // Track error as difficult
+      return { suggestions: [], reason: 'prediction_error', confidence: 0, isDifficult: true };
     }
   }
 
@@ -894,12 +955,244 @@ class SynapseMLWorker {
   }
 
   /**
+   * Get difficult sequences for LLM analysis
+   */
+  public getDifficultSequences(): Array<{confidence: number, timestamp: number, sequence: SynapseEvent[]}> {
+    return this.predictionHistory.filter(entry => 
+      entry.confidence < this.lowConfidenceThreshold
+    ).slice(-10); // Return last 10 difficult sequences
+  }
+
+  /**
+   * Get patterns that frequently cause difficulty
+   */
+  public getDifficultPatterns(): Map<string, number> {
+    // Return patterns that occur frequently and cause difficulty
+    const frequentDifficultPatterns = new Map();
+    
+    for (const [pattern, count] of this.difficultPatterns.entries()) {
+      if (count >= 2) { // Pattern occurred at least twice
+        frequentDifficultPatterns.set(pattern, count);
+      }
+    }
+    
+    return frequentDifficultPatterns;
+  }
+
+  /**
+   * Reset difficulty tracking (used after LLM provides insights)
+   */
+  public resetDifficultyTracking(): void {
+    console.log('[ML Worker] Resetting difficulty tracking after LLM insights');
+    this.predictionHistory = [];
+    this.difficultPatterns.clear();
+  }
+
+  /**
+   * Apply LLM insights to improve predictions
+   */
+  public applyLLMInsights(insights: Array<{pattern: string, intent: string, confidence: number}>): void {
+    console.log(`[ML Worker] Applying ${insights.length} LLM insights to improve predictions`);
+    
+    for (const insight of insights) {
+      if (insight.confidence > 0.7) {
+        // Convert LLM intent into improved selector transitions
+        // This is where we convert "大脑" insights into "小脑" patterns
+        
+        const patternKey = insight.pattern;
+        
+        // Remove this pattern from difficult patterns since LLM provided insight
+        if (this.difficultPatterns.has(patternKey)) {
+          console.log(`[ML Worker] LLM insight resolves difficult pattern: ${patternKey} -> ${insight.intent}`);
+          this.difficultPatterns.delete(patternKey);
+        }
+        
+        // TODO: Could enhance selector transitions based on intent
+        // For now, just log the improvement
+        console.log(`[ML Worker] Applied insight for pattern "${patternKey}": intent="${insight.intent}"`);
+      }
+    }
+  }
+
+  /**
+   * Perform few-shot learning with high-quality synthetic data
+   * This implements rapid learning from small amounts of high-confidence data
+   */
+  public async fewShotLearning(syntheticData: any[], learningRate: number = 0.01): Promise<any> {
+    console.log(`[ML Worker] Starting few-shot learning with ${syntheticData.length} high-quality samples`);
+    
+    try {
+      let processedSamples = 0;
+      const weightUpdates: Map<string, number> = new Map();
+      
+      for (const sample of syntheticData) {
+        if (sample.sequence && sample.intent && sample.confidence > 0.7) {
+          // Extract high-confidence patterns for rapid learning
+          const selectors = sample.sequence
+            .filter((event: any) => event.payload?.targetSelector)
+            .map((event: any) => event.payload.targetSelector!);
+          
+          if (selectors.length >= 2) {
+            // Enhanced weight updates for high-confidence transitions
+            for (let i = 0; i < selectors.length - 1; i++) {
+              const current = selectors[i];
+              const next = selectors[i + 1];
+              
+              if (!this.selectorTransitions.has(current)) {
+                this.selectorTransitions.set(current, new Map());
+              }
+              
+              const transitions = this.selectorTransitions.get(current)!;
+              const currentCount = transitions.get(next) || 0;
+              
+              // Apply few-shot learning: higher boost for high-confidence data
+              const confidenceBoost = sample.confidence * learningRate * 10;
+              const newCount = currentCount + confidenceBoost;
+              
+              transitions.set(next, newCount);
+              weightUpdates.set(`${current}->${next}`, confidenceBoost);
+              
+              // Add to vocabulary
+              this.selectorToIndex(current);
+              this.selectorToIndex(next);
+            }
+            
+            processedSamples++;
+          }
+        }
+      }
+      
+      console.log(`[ML Worker] Few-shot learning completed: ${processedSamples} samples, ${weightUpdates.size} weight updates`);
+      
+      return {
+        status: 'success',
+        processedSamples,
+        totalSamples: syntheticData.length,
+        weightUpdates: weightUpdates.size,
+        learningRate,
+        timestamp: Date.now()
+      };
+      
+    } catch (error) {
+      console.error('[ML Worker] Few-shot learning failed:', error);
+      return {
+        status: 'error',
+        error: error instanceof Error ? error.message : 'Unknown error',
+        timestamp: Date.now()
+      };
+    }
+  }
+
+  /**
+   * Process synthetic training data generated from LLM insights
+   * Uses few-shot learning for high-confidence samples
+   */
+  public async processSyntheticTrainingData(syntheticData: any[]): Promise<any> {
+    console.log(`[ML Worker] Processing ${syntheticData.length} synthetic training samples from LLM insights`);
+    
+    try {
+      // Separate high-confidence samples for few-shot learning
+      const highConfidenceSamples = syntheticData.filter(sample => sample.confidence > 0.7);
+      const regularSamples = syntheticData.filter(sample => sample.confidence <= 0.7);
+      
+      let results = {
+        fewShotResults: null as any,
+        regularResults: null as any
+      };
+      
+      // Apply few-shot learning to high-confidence samples
+      if (highConfidenceSamples.length > 0) {
+        console.log(`[ML Worker] Applying few-shot learning to ${highConfidenceSamples.length} high-confidence samples`);
+        results.fewShotResults = await this.fewShotLearning(highConfidenceSamples, 0.02);
+      }
+      
+      // Process regular samples normally
+      if (regularSamples.length > 0) {
+        console.log(`[ML Worker] Processing ${regularSamples.length} regular synthetic samples`);
+        results.regularResults = await this.processRegularSyntheticData(regularSamples);
+      }
+      
+      const totalProcessed = (results.fewShotResults?.processedSamples || 0) + (results.regularResults?.processedSamples || 0);
+      
+      console.log(`[ML Worker] Successfully processed ${totalProcessed} total synthetic samples`);
+      
+      return {
+        status: 'success',
+        processedSamples: totalProcessed,
+        totalSamples: syntheticData.length,
+        fewShotSamples: highConfidenceSamples.length,
+        regularSamples: regularSamples.length,
+        results: results,
+        timestamp: Date.now()
+      };
+      
+    } catch (error) {
+      console.error('[ML Worker] Failed to process synthetic training data:', error);
+      return {
+        status: 'error',
+        error: error instanceof Error ? error.message : 'Unknown error',
+        timestamp: Date.now()
+      };
+    }
+  }
+
+  /**
+   * Process regular synthetic data with standard weights
+   */
+  private async processRegularSyntheticData(syntheticData: any[]): Promise<any> {
+    let processedSamples = 0;
+    
+    for (const sample of syntheticData) {
+      if (sample.sequence && sample.intent) {
+        // Extract selectors from synthetic sequence
+        const selectors = sample.sequence
+          .filter((event: any) => event.payload?.targetSelector)
+          .map((event: any) => event.payload.targetSelector!);
+        
+        if (selectors.length >= 2) {
+          // Update selector transitions with synthetic data
+          for (let i = 0; i < selectors.length - 1; i++) {
+            const current = selectors[i];
+            const next = selectors[i + 1];
+            
+            if (!this.selectorTransitions.has(current)) {
+              this.selectorTransitions.set(current, new Map());
+            }
+            
+            const transitions = this.selectorTransitions.get(current)!;
+            // Give confidence-weighted boost to synthetic data
+            const currentCount = transitions.get(next) || 0;
+            const boost = (sample.confidence || 0.5) * 0.5;
+            transitions.set(next, currentCount + boost);
+            
+            // Add to vocabulary
+            this.selectorToIndex(current);
+            this.selectorToIndex(next);
+          }
+          
+          processedSamples++;
+        }
+      }
+    }
+    
+    return {
+      status: 'success',
+      processedSamples,
+      totalSamples: syntheticData.length
+    };
+  }
+
+  /**
    * Reset model to initial state
    */
   public resetModel(): any {
     // Reset codebook to empty state
     this.codebook = [];
     this.lastEventTimestamp = 0;
+    
+    // Reset difficulty tracking
+    this.predictionHistory = [];
+    this.difficultPatterns.clear();
     
     console.log('[ML Worker] Model reset to initial state');
     
@@ -938,6 +1231,8 @@ self.onmessage = async (e) => {
         const predictResult = await worker.predict(data.currentSequence || []);
         const predictionResult = {
           suggestions: predictResult.suggestions,
+          confidence: predictResult.confidence || 0,
+          isDifficult: predictResult.isDifficult || false,
           timestamp: Date.now(),
           modelType: 'gru_intelligent_focus',
           taskGuidance: predictResult.taskGuidance,
@@ -968,6 +1263,42 @@ self.onmessage = async (e) => {
         // Return model info
         const modelInfo = worker.getModelInfo();
         self.postMessage({ type: 'getInfoResult', success: true, data: modelInfo, requestId });
+        break;
+        
+      case 'getDifficultSequences':
+        // Get sequences that were difficult to predict
+        const difficultSequences = worker.getDifficultSequences();
+        self.postMessage({ type: 'getDifficultSequencesResult', success: true, data: difficultSequences, requestId });
+        break;
+        
+      case 'getDifficultPatterns':
+        // Get patterns that frequently cause difficulty
+        const difficultPatterns = Array.from(worker.getDifficultPatterns().entries());
+        self.postMessage({ type: 'getDifficultPatternsResult', success: true, data: difficultPatterns, requestId });
+        break;
+        
+      case 'applyLLMInsights':
+        // Apply insights from LLM analysis
+        worker.applyLLMInsights(data.insights || []);
+        self.postMessage({ type: 'applyLLMInsightsResult', success: true, data: { applied: true }, requestId });
+        break;
+        
+      case 'processSyntheticTrainingData':
+        // Process synthetic training data from LLM
+        const syntheticResult = await worker.processSyntheticTrainingData(data.syntheticData || []);
+        self.postMessage({ type: 'processSyntheticTrainingDataResult', success: true, data: syntheticResult, requestId });
+        break;
+        
+      case 'fewShotLearning':
+        // Perform few-shot learning with high-confidence data
+        const fewShotResult = await worker.fewShotLearning(data.syntheticData || [], data.learningRate || 0.01);
+        self.postMessage({ type: 'fewShotLearningResult', success: true, data: fewShotResult, requestId });
+        break;
+        
+      case 'resetDifficultyTracking':
+        // Reset difficulty tracking after LLM analysis
+        worker.resetDifficultyTracking();
+        self.postMessage({ type: 'resetDifficultyTrackingResult', success: true, data: { reset: true }, requestId });
         break;
         
       case 'resetModel':
