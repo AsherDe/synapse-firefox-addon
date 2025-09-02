@@ -154,9 +154,9 @@ class PredictionExperiment:
         
         return metrics
     
-    def calculate_top_k_accuracy(self, y_pred_proba: list, y_true: list, k: int) -> float:
+    def calculate_top_k_accuracy(self, y_pred_proba, y_true: list, k: int) -> float:
         """计算Top-K准确率"""
-        if not y_pred_proba or len(y_pred_proba) == 0:
+        if y_pred_proba is None or len(y_pred_proba) == 0:
             return 0.0
         
         correct = 0
@@ -864,8 +864,11 @@ class PredictionExperiment:
                 best_model, best_acc = sorted_models[0]
                 if len(sorted_models) > 1:
                     second_model, second_acc = sorted_models[1]
-                    improvement = (best_acc / second_acc - 1) * 100
-                    print(f"  → {best_model.upper()}性能最佳，比{second_model.upper()}高{improvement:.1f}%")
+                    if second_acc > 0:
+                        improvement = (best_acc / second_acc - 1) * 100
+                        print(f"  → {best_model.upper()}性能最佳，比{second_model.upper()}高{improvement:.1f}%")
+                    else:
+                        print(f"  → {best_model.upper()}性能最佳 ({best_acc:.3f})，{second_model.upper()}未能训练成功")
                     
                 if best_acc > baseline_acc * 1.1:
                     print(f"- 深度学习模型({best_model.upper()})显示出优势，建议进一步优化")

@@ -56,18 +56,18 @@ class FeasibilityAnalyzer:
                 print(f"解析轨迹数据时出错: {e}")
                 continue
         
-        # 如果没有找到真实轨迹数据，则fallback到模拟数据但给出明确警告
+        # 如果没有找到真实轨迹数据，返回空列表
         if not trails:
             print("警告：无法从数据中提取真实鼠标轨迹。")
             print("请确保数据收集时正确记录了user_action_mouse_pattern事件的trail字段。")
-            print("当前将使用少量模拟数据进行演示，但这会降低分析的说服力。")
-            return self._fallback_to_simulated_data()
+            print("无法进行分析，需要真实的鼠标轨迹数据。")
+            return []
         
         print(f"成功提取了 {len(trails)} 条真实鼠标轨迹")
         return trails
     
     def _parse_trails_from_json(self) -> list:
-        """尝试从JSON格式的数据文件中解析轨迹"""
+        """从JSON格式的数据文件中解析已经预计算的DCT系数或重建轨迹"""
         trails = []
         
         # 检查是否有对应的JSON调试数据文件
@@ -79,20 +79,41 @@ class FeasibilityAnalyzer:
                     with open(json_file, 'r', encoding='utf-8') as f:
                         data = json.load(f)
                         
-                    # 查找鼠标轨迹事件
-                    if isinstance(data, list):
-                        for event in data:
+                    # 查找鼠标轨迹事件，支持新的数据结构
+                    events_list = data.get('eventSequence', data) if isinstance(data, dict) else data
+                    
+                    if isinstance(events_list, list):
+                        for event in events_list:
                             if (isinstance(event, dict) and 
-                                event.get('type') == 'user_action_mouse_pattern' and
+                                event.get('type') == 'ui.mouse_pattern' and
                                 'payload' in event and
-                                'trail' in event['payload']):
+                                'features' in event['payload']):
                                 
-                                trail_data = event['payload']['trail']
-                                if isinstance(trail_data, list) and len(trail_data) >= 3:
-                                    trail_points = [[p['x'], p['y']] for p in trail_data 
-                                                  if isinstance(p, dict) and 'x' in p and 'y' in p]
-                                    if trail_points:
-                                        trails.append(np.array(trail_points))
+                                features = event['payload']['features']
+                                
+                                # 检查是否有DCT系数数据
+                                if ('dct_x_coefficients' in features and 
+                                    'dct_y_coefficients' in features):
+                                    
+                                    dct_x = features['dct_x_coefficients']
+                                    dct_y = features['dct_y_coefficients']
+                                    
+                                    if (isinstance(dct_x, list) and isinstance(dct_y, list) and 
+                                        len(dct_x) >= 3 and len(dct_y) >= 3):
+                                        
+                                        # 使用IDCT重建轨迹
+                                        trail_points = self._reconstruct_trail_from_dct(dct_x, dct_y)
+                                        if trail_points is not None:
+                                            trails.append(trail_points)
+                                
+                                # 兼容性：如果有trail字段，也提取
+                                elif 'trail' in event['payload']:
+                                    trail_data = event['payload']['trail']
+                                    if isinstance(trail_data, list) and len(trail_data) >= 3:
+                                        trail_points = [[p['x'], p['y']] for p in trail_data 
+                                                      if isinstance(p, dict) and 'x' in p and 'y' in p]
+                                        if trail_points:
+                                            trails.append(np.array(trail_points))
                                         
                     print(f"从 {json_file} 中提取了 {len(trails)} 条轨迹")
                     
@@ -102,34 +123,21 @@ class FeasibilityAnalyzer:
         
         return trails
     
-    def _fallback_to_simulated_data(self) -> list:
-        """作为fallback的模拟数据生成"""
-        trails = []
-        print("生成少量高质量模拟数据用于技术演示...")
-        
-        # 生成更真实的轨迹模式
-        for _ in range(3):  # 减少数量，强调这是演示用途
-            trail_len = np.random.randint(20, 60)  # 变化的轨迹长度
+    def _reconstruct_trail_from_dct(self, dct_x, dct_y, num_points=50):
+        """从DCT系数重建鼠标轨迹"""
+        try:
+            # 使用IDCT重建信号
+            reconstructed_x = idct(dct_x, n=num_points)
+            reconstructed_y = idct(dct_y, n=num_points)
             
-            # 模拟更真实的鼠标移动模式
-            t = np.linspace(0, 1, trail_len)
+            # 构造轨迹点
+            trail_points = np.column_stack((reconstructed_x, reconstructed_y))
+            return trail_points
             
-            # 使用贝塞尔曲线风格的轨迹
-            start_x, start_y = np.random.rand(2) * np.array([1200, 800]) + 100
-            end_x, end_y = np.random.rand(2) * np.array([1200, 800]) + 100
-            ctrl_x, ctrl_y = (start_x + end_x)/2 + np.random.randn(2) * 200
-            
-            # 二次贝塞尔曲线
-            x_trail = (1-t)**2 * start_x + 2*(1-t)*t * ctrl_x + t**2 * end_x
-            y_trail = (1-t)**2 * start_y + 2*(1-t)*t * ctrl_y + t**2 * end_y
-            
-            # 添加自然的抖动
-            x_trail += np.random.randn(trail_len) * 3
-            y_trail += np.random.randn(trail_len) * 3
-            
-            trails.append(np.vstack([x_trail, y_trail]).T)
-            
-        return trails
+        except Exception as e:
+            print(f"重建轨迹时出错: {e}")
+            return None
+    
 
     def analyze_dct_energy(self, n_coeffs_to_keep: int = 10):
         """分析DCT系数的能量集中情况"""
