@@ -217,7 +217,7 @@ async function broadcastCompleteDataSnapshot(port?: any): Promise<void> {
 }
 
 // Event handlers
-async function handleSynapseEvent(message: any, _sender: any): Promise<void> {
+async function handleSynapseEvent(message: any, sender: any): Promise<void> {
   try {
     if (stateManager.get('extensionPaused')) {
       return;
@@ -226,6 +226,12 @@ async function handleSynapseEvent(message: any, _sender: any): Promise<void> {
     // Check if message is already a SynapseEvent (from new content.ts)
     if (message.timestamp && message.type && message.context && message.payload) {
       console.log('[Background] Processing SynapseEvent:', message.type);
+      
+      // Fill in tabId and windowId from sender if available
+      if (sender?.tab) {
+        message.context.tabId = sender.tab.id || null;
+        message.context.windowId = sender.tab.windowId || null;
+      }
       
       // Store the clean event directly
       await dataStorage.addToSequence('globalActionSequence', message);
