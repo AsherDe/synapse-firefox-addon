@@ -128,6 +128,31 @@ export class DataStorage {
   }
 
   /**
+   * Generic get method for plugin compatibility
+   */
+  async get(key: string): Promise<string | null> {
+    try {
+      const result = await browser.storage.local.get(key);
+      return result[key] || null;
+    } catch (error) {
+      console.error(`[DataStorage] Failed to get data for key ${key}:`, error);
+      return null;
+    }
+  }
+
+  /**
+   * Generic set method for plugin compatibility
+   */
+  async set(key: string, value: string): Promise<void> {
+    try {
+      await browser.storage.local.set({ [key]: value });
+    } catch (error) {
+      console.error(`[DataStorage] Failed to set data for key ${key}:`, error);
+      throw error;
+    }
+  }
+
+  /**
    * Get storage statistics
    */
   async getStorageStats(): Promise<{ bytesInUse: number; keys: string[] }> {

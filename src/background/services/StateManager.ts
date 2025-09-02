@@ -23,6 +23,28 @@ export class StateManager {
 
   constructor() {
     this.loadPersistentState();
+    // Initialize default LLM settings
+    this.initializeDefaultSettings();
+  }
+
+  private initializeDefaultSettings(): void {
+    // Initialize LLM feature toggle - default enabled but can be disabled
+    if (!this.state.has('llmEnabled')) {
+      this.set('llmEnabled', true);
+      this.markAsPersistent('llmEnabled');
+    }
+    
+    // Initialize LLM analysis settings
+    if (!this.state.has('llmAnalysisEnabled')) {
+      this.set('llmAnalysisEnabled', true);
+      this.markAsPersistent('llmAnalysisEnabled');
+    }
+    
+    // Initialize LLM plugin integration
+    if (!this.state.has('llmPluginIntegration')) {
+      this.set('llmPluginIntegration', true);
+      this.markAsPersistent('llmPluginIntegration');
+    }
   }
 
   /**
@@ -192,6 +214,53 @@ export class StateManager {
         }
       });
     }
+  }
+
+  // LLM control convenience methods
+  
+  /**
+   * Check if LLM functionality is enabled
+   */
+  isLLMEnabled(): boolean {
+    return this.get('llmEnabled') === true;
+  }
+
+  /**
+   * Enable or disable LLM functionality
+   */
+  setLLMEnabled(enabled: boolean): void {
+    this.set('llmEnabled', enabled);
+    console.log(`[StateManager] LLM functionality ${enabled ? 'enabled' : 'disabled'}`);
+  }
+
+  /**
+   * Check if LLM analysis is enabled
+   */
+  isLLMAnalysisEnabled(): boolean {
+    return this.get('llmAnalysisEnabled') === true && this.isLLMEnabled();
+  }
+
+  /**
+   * Enable or disable LLM analysis
+   */
+  setLLMAnalysisEnabled(enabled: boolean): void {
+    this.set('llmAnalysisEnabled', enabled);
+    console.log(`[StateManager] LLM analysis ${enabled ? 'enabled' : 'disabled'}`);
+  }
+
+  /**
+   * Check if LLM plugin integration is enabled
+   */
+  isLLMPluginIntegrationEnabled(): boolean {
+    return this.get('llmPluginIntegration') === true && this.isLLMEnabled();
+  }
+
+  /**
+   * Enable or disable LLM plugin integration
+   */
+  setLLMPluginIntegrationEnabled(enabled: boolean): void {
+    this.set('llmPluginIntegration', enabled);
+    console.log(`[StateManager] LLM plugin integration ${enabled ? 'enabled' : 'disabled'}`);
   }
 
   // Task management convenience methods

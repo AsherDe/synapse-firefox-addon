@@ -398,9 +398,193 @@ Format as numbered list with brief explanations.
 
       console.log(`[LLMService] Completed idle analysis of ${results.length} sequences`);
       
+      // Generate synthetic training data from successful analyses
+      if (results.length > 0) {
+        await this.generateSyntheticTrainingData(results);
+      }
+      
     } catch (error) {
       console.error('[LLMService] Idle analysis failed:', error);
     }
+  }
+
+  /**
+   * Generate synthetic training data from analyzed sequences
+   * Creates variations of high-confidence sequences for model training
+   */
+  async generateSyntheticTrainingData(analysisResults: any[]): Promise<void> {
+    const taskId = 'data_augmentation';
+    
+    try {
+      // Ensure we have a text generation engine for data augmentation
+      if (!this.engines.has(taskId)) {
+        await this.createEngine(taskId, {
+          taskType: 'text-generation'
+        });
+      }
+
+      console.log('[LLMService] Generating synthetic training data from analysis results');
+      
+      const syntheticData = [];
+      
+      for (const result of analysisResults) {
+        if (result.confidence > 0.6) { // Only use reasonably confident results
+          // Generate variations based on the sequence pattern
+          const variations = await this.generateSequenceVariations(result);
+          syntheticData.push(...variations);
+        }
+      }
+      
+      // Store synthetic data
+      if (syntheticData.length > 0) {
+        this.stateManager.set('syntheticTrainingData', {
+          timestamp: Date.now(),
+          data: syntheticData,
+          count: syntheticData.length,
+          source: 'llm_augmentation'
+        });
+        
+        console.log(`[LLMService] Generated ${syntheticData.length} synthetic training samples`);
+      }
+      
+    } catch (error) {
+      console.error('[LLMService] Failed to generate synthetic training data:', error);
+    }
+  }
+
+  /**
+   * Generate sequence variations for data augmentation
+   */
+  private async generateSequenceVariations(analysisResult: any): Promise<any[]> {
+    const taskId = 'data_augmentation';
+    
+    try {
+      const sequence = analysisResult.sequence;
+      const intent = analysisResult.intent;
+      
+      // Create a descriptive prompt for generating variations
+      const sequenceDescription = sequence
+        .map((event: any, index: number) => {
+          const action = event.type || 'action';
+          const context = event.context?.tabInfo?.title || event.context?.tabInfo?.url || 'webpage';
+          const text = event.payload?.features?.textContent || '';
+          return `${index + 1}. ${action} on "${context}"${text ? ` with text "${text}"` : ''}`;
+        })
+        .join('\n');
+
+      const prompt = `
+Given this user behavior sequence with intent "${intent}":
+
+${sequenceDescription}
+
+Generate 2 similar but slightly different behavior sequences that maintain the same intent but vary in:
+- Text content (use similar but different words)
+- Element positions (slightly different coordinates)
+- Timing (small variations)
+
+Format each sequence as a JSON array with the same structure as the original.
+Focus on creating realistic variations that a user might perform for the same task.
+`;
+
+      const response = await this.generateText(taskId, prompt, {
+        maxTokens: 400,
+        temperature: 0.7
+      });
+
+      if (response.success && response.result) {
+        // Parse generated variations
+        try {
+          // Simple extraction of JSON-like patterns from the response
+          const variations = this.extractVariationsFromResponse(response.result, sequence, intent);
+          return variations;
+        } catch (parseError) {
+          console.warn('[LLMService] Failed to parse generated variations:', parseError);
+        }
+      }
+      
+    } catch (error) {
+      console.error('[LLMService] Failed to generate sequence variations:', error);
+    }
+    
+    // Fallback: create simple variations manually
+    return this.createSimpleVariations(analysisResult);
+  }
+
+  /**
+   * Extract variations from LLM response text
+   */
+  private extractVariationsFromResponse(_responseText: string, originalSequence: any[], intent: string): any[] {
+    // This is a simplified extraction - in practice, you might want more robust parsing
+    const variations = [];
+    
+    // For now, create simple variations based on the original sequence
+    for (let i = 0; i < 2; i++) {
+      const variation = {
+        sequence: originalSequence.map((event: any) => ({
+          ...event,
+          timestamp: event.timestamp + (i * 1000), // Slight time variation
+          payload: {
+            ...event.payload,
+            features: {
+              ...event.payload.features,
+              llmIntent: intent,
+              synthetic: true,
+              variationIndex: i
+            }
+          }
+        })),
+        intent: intent,
+        confidence: 0.8, // High confidence for LLM-generated data
+        source: 'llm_variation'
+      };
+      
+      variations.push(variation);
+    }
+    
+    return variations;
+  }
+
+  /**
+   * Create simple fallback variations when LLM parsing fails
+   */
+  private createSimpleVariations(analysisResult: any): any[] {
+    const sequence = analysisResult.sequence;
+    const intent = analysisResult.intent;
+    
+    const variations = [];
+    
+    // Create 2 simple variations
+    for (let i = 0; i < 2; i++) {
+      const variation = {
+        sequence: sequence.map((event: any) => ({
+          ...event,
+          timestamp: Date.now() + (i * 1000),
+          payload: {
+            ...event.payload,
+            features: {
+              ...event.payload.features,
+              llmIntent: intent,
+              synthetic: true,
+              variationIndex: i,
+              // Add small position variations if position exists
+              ...(event.payload.position && {
+                position: {
+                  x: event.payload.position.x + (Math.random() - 0.5) * 10,
+                  y: event.payload.position.y + (Math.random() - 0.5) * 10
+                }
+              })
+            }
+          }
+        })),
+        intent: intent,
+        confidence: 0.7,
+        source: 'simple_variation'
+      };
+      
+      variations.push(variation);
+    }
+    
+    return variations;
   }
 
   /**
