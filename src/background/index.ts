@@ -7,6 +7,7 @@ import { MessageRouter } from './services/MessageRouter';
 import { StateManager } from './services/StateManager';
 import { DataStorage } from './services/DataStorage';
 import { MLService } from './services/MLService';
+import { LLMService } from './services/LLMService';
 import { PluginSystemAdapter } from './PluginSystemAdapter';
 
 // Browser API compatibility using webextension-polyfill
@@ -20,6 +21,7 @@ let messageRouter: MessageRouter;
 let stateManager: StateManager;
 let dataStorage: DataStorage;
 let mlService: MLService;
+let llmService: LLMService;
 let pluginSystem: PluginSystemAdapter;
 
 // Initialize all services
@@ -60,6 +62,9 @@ async function initializeServices(): Promise<void> {
     // MLService放在最后创建，确保状态监听器已经设置好
     mlService = new MLService(stateManager, dataStorage);
     
+    // Initialize LLM service for browser-native AI capabilities
+    llmService = new LLMService(stateManager);
+    
     // Initialize plugin system after all core services are ready
     pluginSystem = new PluginSystemAdapter();
     await pluginSystem.initialize(messageRouter, stateManager, dataStorage, mlService);
@@ -81,6 +86,9 @@ async function initializeServices(): Promise<void> {
         console.warn('[Background] Failed to show floating control centers:', error);
       }
     }, 2000);
+    
+    // Set up periodic idle analysis for LLM service
+    setupIdleAnalysis();
     
     console.log('[SYNAPSE BACKGROUND] ===== SERVICES INITIALIZED SUCCESSFULLY =====');
     
@@ -140,6 +148,12 @@ function setupMessageHandlers(): void {
     'getCodebookInfo': handleGetCodebookInfoMessage,
   'getVocabulary': handleGetVocabularyMessage,
   'getState': handleGetStateMessage,
+    
+    // LLM Service operations
+    'getLLMStatus': handleGetLLMStatusMessage,
+    'requestLLMPermission': handleRequestLLMPermissionMessage,
+    'analyzeBehaviorSequence': handleAnalyzeBehaviorSequenceMessage,
+    'extractWorkflowRules': handleExtractWorkflowRulesMessage,
     
     // Floating control center messages
     'FLOATING_CONTROL_TOGGLE_MONITORING': handleFloatingControlToggleMonitoring,
@@ -216,6 +230,53 @@ async function broadcastCompleteDataSnapshot(port?: any): Promise<void> {
   }
 }
 
+// Set up periodic idle analysis
+function setupIdleAnalysis(): void {
+  // Run idle analysis every 5 minutes
+  setInterval(async () => {
+    try {
+      // Only run if we have LLM permission
+      if (await llmService.hasPermission()) {
+        await llmService.processIdleAnalysis();
+      }
+    } catch (error) {
+      console.warn('[Background] Idle analysis failed:', error instanceof Error ? error.message : String(error));
+    }
+  }, 5 * 60 * 1000); // 5 minutes
+  
+  console.log('[Background] Idle analysis scheduled every 5 minutes');
+}
+
+// Enhanced event handler to collect difficult sequences for LLM analysis
+async function collectDifficultSequence(event: SynapseEvent): Promise<void> {
+  try {
+    // Simple heuristic: consider sequences with low confidence or unusual patterns as "difficult"
+    const lastPrediction = stateManager.get('lastPrediction');
+    const isLowConfidence = lastPrediction && lastPrediction.confidence < 0.3;
+    
+    // Get recent events to form a sequence context
+    const recentSequence = await dataStorage.getSequence('globalActionSequence');
+    const contextWindow = recentSequence.slice(-5); // Last 5 events as context
+    
+    if (isLowConfidence && contextWindow.length >= 3) {
+      console.log('[Background] Collecting difficult sequence for LLM analysis');
+      
+      // Store difficult sequences for later analysis
+      const difficultSequences = stateManager.get('difficultSequences') || [];
+      difficultSequences.push(contextWindow);
+      
+      // Keep only last 20 difficult sequences to manage memory
+      if (difficultSequences.length > 20) {
+        difficultSequences.shift();
+      }
+      
+      stateManager.set('difficultSequences', difficultSequences);
+    }
+  } catch (error) {
+    console.warn('[Background] Failed to collect difficult sequence:', error instanceof Error ? error.message : String(error));
+  }
+}
+
 // Event handlers
 async function handleSynapseEvent(message: any, sender: any): Promise<void> {
   try {
@@ -238,6 +299,11 @@ async function handleSynapseEvent(message: any, sender: any): Promise<void> {
       
       // Forward to ML service
       await mlService.processEvent(message);
+      
+      // Collect difficult sequences for LLM analysis (non-blocking)
+      collectDifficultSequence(message).catch(error => {
+        console.warn('[Background] Failed to collect difficult sequence:', error);
+      });
       
       // Process through plugin system (non-blocking)
       if (pluginSystem && pluginSystem.isInitialized()) {
@@ -831,8 +897,71 @@ initializeServices().catch(error => {
 });
 
 
+// LLM Service message handlers
+async function handleGetLLMStatusMessage(): Promise<any> {
+  try {
+    const status = llmService.getStatus();
+    const permissionStatus = llmService.getPermissionStatus();
+    const engines = llmService.getEngines();
+    
+    return { 
+      success: true, 
+      data: { 
+        status, 
+        permissionStatus, 
+        engines,
+        hasPermission: await llmService.hasPermission()
+      } 
+    };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    return { success: false, error: errorMessage };
+  }
+}
+
+async function handleRequestLLMPermissionMessage(): Promise<any> {
+  try {
+    const granted = await llmService.requestPermission();
+    return { success: true, data: { granted } };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    return { success: false, error: errorMessage };
+  }
+}
+
+async function handleAnalyzeBehaviorSequenceMessage(message: any): Promise<any> {
+  try {
+    const sequence = message.sequence || [];
+    if (sequence.length === 0) {
+      return { success: false, error: 'No sequence provided for analysis' };
+    }
+    
+    const result = await llmService.analyzeUserSequence(sequence);
+    return { success: true, data: result };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    return { success: false, error: errorMessage };
+  }
+}
+
+async function handleExtractWorkflowRulesMessage(message: any): Promise<any> {
+  try {
+    const patterns = message.patterns || [];
+    if (patterns.length === 0) {
+      return { success: false, error: 'No patterns provided for rule extraction' };
+    }
+    
+    const result = await llmService.extractWorkflowRules(patterns);
+    return { success: true, data: result };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    return { success: false, error: errorMessage };
+  }
+}
+
 // Cleanup on extension unload
 self.addEventListener('beforeunload', () => {
   mlService?.cleanup();
+  llmService?.cleanup();
   dataStorage?.flushAllPendingWrites();
 });
