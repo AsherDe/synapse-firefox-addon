@@ -198,6 +198,15 @@ async function broadcastCompleteDataSnapshot(port?: any): Promise<void> {
     const pauseState = stateManager.get('extensionPaused') || false;
     const guidanceEnabled = stateManager.get('assistantEnabled') !== false;
     let modelInfo = stateManager.get('fullModelInfo');
+    
+    // Get LLM settings
+    const llmSettings = {
+      llmEnabled: stateManager.isLLMEnabled(),
+      llmAnalysisEnabled: stateManager.isLLMAnalysisEnabled(),
+      llmPluginIntegrationEnabled: stateManager.isLLMPluginIntegrationEnabled(),
+      hasPermission: await llmService.hasPermission(),
+      serviceStatus: llmService.getStatus()
+    };
 
     // If model info is not cached yet, try to get it from MLService
     if (!modelInfo && mlService) {
@@ -220,6 +229,7 @@ async function broadcastCompleteDataSnapshot(port?: any): Promise<void> {
         paused: pauseState,
         guidanceEnabled: guidanceEnabled,
         modelInfo: modelInfo || { status: 'loading' },
+        llmSettings: llmSettings,
         timestamp: Date.now()
       }
     };
