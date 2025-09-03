@@ -239,6 +239,11 @@ class WorkflowAnalysisExperiment:
         # 2. Analyze clipboard enhancement
         clipboard_stats = self.analyze_clipboard_enhancement()
         
+        # 2.5. 新增：高阶模式发现
+        print("\n3. 运行高阶模式发现算法...")
+        discovered_patterns = self.discover_high_order_patterns()
+        top_patterns = self.print_discovered_patterns_report()
+        
         # 3. Analyze workflow efficiency
         efficiency_stats = self.analyze_workflow_efficiency()
         
@@ -247,6 +252,11 @@ class WorkflowAnalysisExperiment:
             'workflow_patterns': len(workflows),
             'clipboard_enhancement': clipboard_stats,
             'efficiency_analysis': efficiency_stats,
+            'high_order_patterns': {
+                'total_discovered': len(self.discovered_patterns),
+                'semantic_patterns': self.semantic_patterns[:5],  # Top 5
+                'discovery_algorithm': 'FAST-inspired cross-tab pattern mining'
+            },
             'analysis_timestamp': datetime.now().isoformat()
         }
         
@@ -288,6 +298,19 @@ class WorkflowAnalysisExperiment:
             print(f"   • Events automatable: {eff.get('automation_potential_events', 0)}")
             print(f"   • Time saving potential: {eff.get('time_saving_potential', 0):.1f}s")
             print(f"   • Pattern repeatability: {eff.get('repeatability_score', 0):.1%}")
+        
+        # 高阶模式发现摘要
+        if 'high_order_patterns' in self.results and self.results['high_order_patterns']:
+            hop = self.results['high_order_patterns']
+            print(f"\n🔍 高阶模式发现:")
+            print(f"   • 发现的复杂模式: {hop.get('total_discovered', 0)}个")
+            
+            semantic_patterns = hop.get('semantic_patterns', [])
+            if semantic_patterns:
+                print(f"   • 最频繁的模式: {semantic_patterns[0]['description']}")
+                print(f"     频率: {semantic_patterns[0]['frequency']}次")
+                print(f"     复杂度: {semantic_patterns[0]['complexity']}")
+            print(f"   • 使用算法: {hop.get('discovery_algorithm', 'Unknown')}")
     
     def save_results(self, output_file=None):
         """Save analysis results to JSON"""
@@ -306,7 +329,7 @@ class WorkflowAnalysisExperiment:
         
         plt.style.use('default')
         fig, axes = plt.subplots(2, 2, figsize=(15, 12))
-        fig.suptitle('Synapse Cross-Tab Workflow Analysis', fontsize=16, fontweight='bold')
+        fig.suptitle('Synapse 跨标签页工作流 & 高阶模式分析', fontsize=16, fontweight='bold')
         
         # 1. Workflow length distribution
         if self.workflow_patterns:
@@ -352,25 +375,50 @@ class WorkflowAnalysisExperiment:
                            ha='center', va='center', transform=axes[1, 0].transAxes)
             axes[1, 0].set_title('Clipboard Operations Distribution')
         
-        # 4. Workflow duration vs complexity
-        if self.workflow_patterns:
-            durations = [w['duration'] for w in self.workflow_patterns]
-            lengths = [w['length'] for w in self.workflow_patterns]
-            scatter = axes[1, 1].scatter(lengths, durations, alpha=0.6, c='orange', s=50)
-            axes[1, 1].set_title('Workflow Duration vs Complexity')
-            axes[1, 1].set_xlabel('Workflow Length (events)')
-            axes[1, 1].set_ylabel('Duration (seconds)')
+        # 4. 高阶模式复杂度分布
+        if self.semantic_patterns:
+            complexities = [p['complexity'] for p in self.semantic_patterns]
+            frequencies = [p['frequency'] for p in self.semantic_patterns]
+            
+            # 根据跨标签页数量着色
+            colors = []
+            for p in self.semantic_patterns:
+                tab_count = p['tabs_involved']
+                if tab_count >= 4:
+                    colors.append('red')    # 高复杂度
+                elif tab_count >= 3:
+                    colors.append('orange') # 中等复杂度
+                else:
+                    colors.append('green')  # 低复杂度
+            
+            scatter = axes[1, 1].scatter(complexities, frequencies, 
+                                       alpha=0.7, c=colors, s=80, edgecolors='black')
+            axes[1, 1].set_title('高阶模式复杂度 vs 频率')
+            axes[1, 1].set_xlabel('复杂度评分')
+            axes[1, 1].set_ylabel('出现频率')
             axes[1, 1].grid(True, alpha=0.3)
             
-            # Add correlation coefficient
-            if len(lengths) > 1:
-                correlation = np.corrcoef(lengths, durations)[0, 1]
-                axes[1, 1].text(0.05, 0.95, f'Correlation: {correlation:.2f}', 
-                               transform=axes[1, 1].transAxes, bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8))
+            # 添加图例
+            from matplotlib.patches import Patch
+            legend_elements = [
+                Patch(facecolor='green', label='简单模式 (2-2标签页)'),
+                Patch(facecolor='orange', label='复杂模式 (3标签页)'),
+                Patch(facecolor='red', label='高度复杂 (4+标签页)')
+            ]
+            axes[1, 1].legend(handles=legend_elements, loc='upper right')
+            
+            # 标注最高频模式
+            if frequencies:
+                max_freq_idx = np.argmax(frequencies)
+                axes[1, 1].annotate(f'最频繁模式\n({frequencies[max_freq_idx]}次)', 
+                                  xy=(complexities[max_freq_idx], frequencies[max_freq_idx]),
+                                  xytext=(10, 10), textcoords='offset points',
+                                  bbox=dict(boxstyle='round,pad=0.3', facecolor='yellow', alpha=0.7),
+                                  arrowprops=dict(arrowstyle='->', connectionstyle='arc3,rad=0'))
         else:
-            axes[1, 1].text(0.5, 0.5, 'No workflow patterns detected', 
+            axes[1, 1].text(0.5, 0.5, 'No high-order patterns discovered', 
                            ha='center', va='center', transform=axes[1, 1].transAxes)
-            axes[1, 1].set_title('Workflow Duration vs Complexity')
+            axes[1, 1].set_title('高阶模式复杂度分布')
         
         plt.tight_layout()
         
