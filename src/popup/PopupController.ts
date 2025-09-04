@@ -22,6 +22,11 @@ export class PopupController {
     
     this.setupBackgroundConnection();
     this.setupEventListeners();
+    
+    // Initialize LLM status display
+    setTimeout(() => {
+      this.updateLLMStatus();
+    }, 1000);
   }
 
   private setupBackgroundConnection(): void {
@@ -122,6 +127,13 @@ export class PopupController {
         if (message.data.guidanceEnabled !== undefined) {
           this.uiManager.updateGuidanceUI(message.data.guidanceEnabled);
         }
+        if (message.data.llmSettings) {
+          this.displayLLMStatus(message.data.llmSettings);
+        }
+        break;
+        
+      case 'llmSettingsUpdate':
+        this.displayLLMStatus(message.data);
         break;
         
       case 'error':
@@ -159,6 +171,23 @@ export class PopupController {
 
     guidanceToggle?.addEventListener('change', (e) => {
       this.toggleGuidance((e.target as HTMLInputElement).checked);
+    });
+
+    // LLM Control Event Listeners
+    const llmToggle = document.getElementById('llmToggle') as HTMLInputElement;
+    const llmAnalysisToggle = document.getElementById('llmAnalysisToggle') as HTMLInputElement;
+    const llmPluginToggle = document.getElementById('llmPluginToggle') as HTMLInputElement;
+
+    llmToggle?.addEventListener('change', (e) => {
+      this.toggleLLM((e.target as HTMLInputElement).checked);
+    });
+
+    llmAnalysisToggle?.addEventListener('change', (e) => {
+      this.toggleLLMAnalysis((e.target as HTMLInputElement).checked);
+    });
+
+    llmPluginToggle?.addEventListener('change', (e) => {
+      this.toggleLLMPluginIntegration((e.target as HTMLInputElement).checked);
     });
 
     // Developer mode tab switching
@@ -202,6 +231,111 @@ export class PopupController {
     if (this.backgroundPort) {
       this.backgroundPort.postMessage({ type: 'setGuidanceState', enabled });
       this.backgroundPort.postMessage({ type: 'guidanceToggled', enabled });
+    }
+  }
+
+  // LLM Control Methods
+  private toggleLLM(enabled: boolean): void {
+    console.log(`LLM functionality ${enabled ? 'enabled' : 'disabled'}`);
+    
+    if (this.backgroundPort) {
+      this.backgroundPort.postMessage({ type: 'toggleLLMEnabled' });
+    } else {
+      browser.runtime.sendMessage({ type: 'toggleLLMEnabled' });
+    }
+    
+    // Update sub-controls based on main toggle
+    const analysisToggle = document.getElementById('llmAnalysisToggle') as HTMLInputElement;
+    const pluginToggle = document.getElementById('llmPluginToggle') as HTMLInputElement;
+    const llmDetails = document.getElementById('llmDetails') as HTMLElement;
+    
+    if (analysisToggle) analysisToggle.disabled = !enabled;
+    if (pluginToggle) pluginToggle.disabled = !enabled;
+    if (llmDetails) llmDetails.style.opacity = enabled ? '1' : '0.5';
+    
+    this.updateLLMStatus();
+  }
+
+  private toggleLLMAnalysis(enabled: boolean): void {
+    console.log(`LLM analysis ${enabled ? 'enabled' : 'disabled'}`);
+    
+    if (this.backgroundPort) {
+      this.backgroundPort.postMessage({ type: 'setLLMAnalysisEnabled', enabled });
+    } else {
+      browser.runtime.sendMessage({ type: 'setLLMAnalysisEnabled', enabled });
+    }
+    
+    this.updateLLMStatus();
+  }
+
+  private toggleLLMPluginIntegration(enabled: boolean): void {
+    console.log(`LLM plugin integration ${enabled ? 'enabled' : 'disabled'}`);
+    
+    if (this.backgroundPort) {
+      this.backgroundPort.postMessage({ type: 'setLLMPluginIntegration', enabled });
+    } else {
+      browser.runtime.sendMessage({ type: 'setLLMPluginIntegration', enabled });
+    }
+    
+    this.updateLLMStatus();
+  }
+
+  private updateLLMStatus(): void {
+    const statusText = document.getElementById('llmStatusText');
+    if (!statusText) return;
+    
+    // Request current LLM settings from background
+    const message = { type: 'getLLMSettings' };
+    
+    if (this.backgroundPort) {
+      this.backgroundPort.postMessage(message);
+    } else {
+      browser.runtime.sendMessage(message, (response: any) => {
+        if (response?.success && response.data) {
+          this.displayLLMStatus(response.data);
+        }
+      });
+    }
+  }
+
+  private displayLLMStatus(llmData: any): void {
+    const statusText = document.getElementById('llmStatusText');
+    const statusContainer = document.getElementById('llmStatus') as HTMLElement;
+    
+    if (!statusText || !statusContainer) return;
+    
+    let status = '';
+    let bgColor = '#f8f9fa';
+    
+    if (llmData.llmEnabled) {
+      if (llmData.hasPermission) {
+        status = '✅ Active & Ready';
+        bgColor = '#f0f9f0';
+      } else {
+        status = '⚠️ Enabled, Permission Needed';
+        bgColor = '#fef8e7';
+      }
+    } else {
+      status = '❌ Disabled';
+      bgColor = '#fdf2f0';
+    }
+    
+    statusText.textContent = status;
+    statusContainer.style.background = bgColor;
+    
+    // Update sub-control states to match backend
+    const llmToggle = document.getElementById('llmToggle') as HTMLInputElement;
+    const analysisToggle = document.getElementById('llmAnalysisToggle') as HTMLInputElement;
+    const pluginToggle = document.getElementById('llmPluginToggle') as HTMLInputElement;
+    
+    if (llmToggle) llmToggle.checked = llmData.llmEnabled;
+    if (analysisToggle) {
+      analysisToggle.checked = llmData.llmAnalysisEnabled;
+      analysisToggle.disabled = !llmData.llmEnabled;
+    }
+    if (pluginToggle) {
+      pluginToggle.checked = llmData.llmPluginIntegrationEnabled;
+      pluginToggle.disabled = !llmData.llmEnabled;
     }
   }
 

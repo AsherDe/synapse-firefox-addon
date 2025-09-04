@@ -526,6 +526,110 @@ export class WorkflowClonerPlugin extends BasePlugin {
     }
   }
 
+  // LLM Integration - Enhanced workflow intelligence
+  async applyLLMInsights(insights: Array<{pattern: string, intent: string, confidence: number}>): Promise<void> {
+    console.log(`[${this.name}] Applying ${insights.length} LLM insights to workflow patterns`);
+    
+    for (const insight of insights) {
+      if (insight.confidence > 0.6) {
+        // Find matching workflow patterns and enhance them with LLM insights
+        for (const [patternId, pattern] of this.patterns) {
+          const patternSignature = this.createPatternSignature(pattern.sequence);
+          
+          if (patternSignature === insight.pattern || this.patternsMatch(patternSignature, insight.pattern)) {
+            // Enhance pattern with LLM intent
+            const enhancedPattern = {
+              ...pattern,
+              llmIntent: insight.intent,
+              llmConfidence: insight.confidence,
+              confidence: Math.min(1.0, pattern.confidence + insight.confidence * 0.1), // Slight confidence boost
+              description: `${pattern.description} (LLM: ${insight.intent})`,
+              lastEnhanced: Date.now()
+            };
+            
+            this.patterns.set(patternId, enhancedPattern);
+            console.log(`[${this.name}] Enhanced pattern "${pattern.name}" with LLM intent: ${insight.intent}`);
+          }
+        }
+        
+        // Create new pattern rules based on LLM insights
+        if (insight.intent.toLowerCase().includes('workflow') || insight.intent.toLowerCase().includes('automation')) {
+          const llmRule = {
+            pattern: insight.pattern,
+            intent: insight.intent,
+            confidence: insight.confidence,
+            suggestedWorkflow: this.deriveWorkflowFromIntent(insight.intent),
+            timestamp: Date.now()
+          };
+          
+          this.context.stateManager.set(`workflowLLMRule_${insight.pattern}`, llmRule);
+        }
+      }
+    }
+    
+    // Store enhanced patterns
+    await this.saveWorkflowPatterns();
+  }
+
+  async generateLLMRules(): Promise<any[]> {
+    const rules = [];
+    
+    // Generate rules based on successful workflow patterns
+    for (const [patternId, pattern] of this.patterns) {
+      if (pattern.frequency > 2 && pattern.confidence > 0.7) {
+        const rule = {
+          source: 'workflow_pattern',
+          pattern: this.createPatternSignature(pattern.sequence),
+          description: pattern.description,
+          frequency: pattern.frequency,
+          confidence: pattern.confidence,
+          crossTabCapable: pattern.crossTabCount > 0,
+          avgCompletionTime: pattern.avgTimeToComplete,
+          steps: pattern.sequence.map(step => ({
+            action: step.action,
+            selector: step.selector,
+            isTabSwitch: step.isTabSwitch,
+            isNewTabAction: step.isNewTabAction
+          })),
+          lastUsed: pattern.lastSeen
+        };
+        
+        rules.push(rule);
+      }
+    }
+    
+    console.log(`[${this.name}] Generated ${rules.length} LLM rules from workflow patterns`);
+    return rules;
+  }
+
+  private createPatternSignature(sequence: ActionSkill[]): string {
+    return sequence
+      .slice(0, 3) // First 3 actions for signature
+      .map(step => step.type)
+      .join('->');
+  }
+
+  private patternsMatch(pattern1: string, pattern2: string): boolean {
+    // Simple pattern matching - could be enhanced
+    return pattern1.includes(pattern2) || pattern2.includes(pattern1);
+  }
+
+  private deriveWorkflowFromIntent(intent: string): string {
+    const lowerIntent = intent.toLowerCase();
+    
+    if (lowerIntent.includes('copy') && lowerIntent.includes('paste')) {
+      return 'copy_paste_workflow';
+    } else if (lowerIntent.includes('form') && lowerIntent.includes('fill')) {
+      return 'form_filling_workflow';
+    } else if (lowerIntent.includes('tab') && lowerIntent.includes('switch')) {
+      return 'tab_switching_workflow';
+    } else if (lowerIntent.includes('navigation') || lowerIntent.includes('browse')) {
+      return 'navigation_workflow';
+    }
+    
+    return 'general_workflow';
+  }
+
   async cleanup(): Promise<void> {
     await this.saveWorkflowPatterns();
     this.patterns.clear();

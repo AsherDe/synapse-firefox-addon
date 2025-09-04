@@ -19,6 +19,10 @@
     "<all_urls>"
   ],
 
+  "optional_permissions": [
+    "trialML"
+  ],
+
   "icons": {
     "48": "dist/icons/icon-48.png",
     "96": "dist/icons/icon-96.png"

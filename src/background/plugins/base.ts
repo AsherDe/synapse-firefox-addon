@@ -11,6 +11,7 @@ export interface PluginContext {
   dataStorage: any;
   messageRouter: any;
   mlWorker: any;
+  llmService?: any;
 }
 
 export interface PluginSuggestion {
@@ -37,6 +38,10 @@ export interface PluginCapability {
   // Optional lifecycle hooks
   onStateChange?(key: string, value: any): void;
   canHandle?(event: AdaptedEvent): boolean;
+  
+  // LLM integration hooks
+  applyLLMInsights?(insights: Array<{pattern: string, intent: string, confidence: number}>): Promise<void>;
+  generateLLMRules?(): Promise<any[]>;
 }
 
 export abstract class BasePlugin implements PluginCapability {
@@ -58,8 +63,19 @@ export abstract class BasePlugin implements PluginCapability {
     this.isInitialized = false;
   }
   
-  canHandle(event: AdaptedEvent): boolean {
+  canHandle(_event: AdaptedEvent): boolean {
     return true; // Default: handle all events, let processEvent decide
+  }
+
+  // Default LLM integration methods - can be overridden by specific plugins
+  async applyLLMInsights(insights: Array<{pattern: string, intent: string, confidence: number}>): Promise<void> {
+    console.log(`[${this.id}] Received ${insights.length} LLM insights (default handler - no action taken)`);
+    // Default: no action, plugins can override this method
+  }
+
+  async generateLLMRules(): Promise<any[]> {
+    console.log(`[${this.id}] Generating LLM rules (default handler - returning empty array)`);
+    return []; // Default: no rules generated, plugins can override this method
   }
   
   protected createSuggestion(

@@ -92,7 +92,7 @@ export class ClipboardEnhancerPlugin extends BasePlugin {
     if (clipboardData && clipboardData.operation === 'copy' && clipboardData.text) {
       // Create enhanced clipboard context
       const context: ClipboardContext = {
-        id: `clip_${Date.now()}_${Math.random().toString(36).substring(2, 2 + Config.ClipboardEnhancer.CLIPBOARD_ID_RANDOM_LENGTH)}`,  
+        id: `clip_${Date.now()}_${this.generateSecureId()}`,  
         copiedText: clipboardData.text,
         sourceUrl: event.url || '',
         sourceTitle: event.pageTitle || '',
@@ -474,6 +474,88 @@ export class ClipboardEnhancerPlugin extends BasePlugin {
     } catch (error) {
       console.warn(`[${this.name}] Failed to save clipboard history:`, error);
     }
+  }
+
+  /**
+   * Generate a cryptographically secure ID for clipboard context
+   */
+  private generateSecureId(): string {
+    try {
+      // Use crypto.getRandomValues for secure random number generation
+      const randomValues = new Uint32Array(2);
+      crypto.getRandomValues(randomValues);
+      
+      // Convert to base36 for compact representation
+      return randomValues[0].toString(36) + randomValues[1].toString(36);
+    } catch (error) {
+      // Fallback to timestamp-based ID if crypto is not available
+      console.warn(`[${this.name}] Crypto not available, using fallback ID generation:`, error);
+      return `fallback_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+    }
+  }
+
+  // LLM Integration - Enhanced clipboard intelligence
+  async applyLLMInsights(insights: Array<{pattern: string, intent: string, confidence: number}>): Promise<void> {
+    console.log(`[${this.name}] Applying ${insights.length} LLM insights to clipboard patterns`);
+    
+    for (const insight of insights) {
+      if (insight.confidence > 0.7) {
+        // Apply insights to improve clipboard context understanding
+        if (insight.intent.toLowerCase().includes('paste') || insight.intent.toLowerCase().includes('form')) {
+          // Store LLM-derived patterns for better paste suggestions
+          const llmRule = {
+            pattern: insight.pattern,
+            intent: insight.intent,
+            confidence: insight.confidence,
+            suggestedAction: this.derivePasteActionFromIntent(insight.intent),
+            timestamp: Date.now()
+          };
+          
+          this.context.stateManager.set(`clipboardLLMRule_${insight.pattern}`, llmRule);
+          console.log(`[${this.name}] Applied LLM rule for pattern "${insight.pattern}": ${insight.intent}`);
+        }
+      }
+    }
+  }
+
+  async generateLLMRules(): Promise<any[]> {
+    const rules = [];
+    
+    // Generate rules based on clipboard usage patterns
+    for (const [, context] of this.clipboardHistory) {
+      if (context.usageCount > 1) {
+        const rule = {
+          source: 'clipboard_pattern',
+          pattern: `copy-${context.sourceUrl}-paste`,
+          description: `Frequently copy from ${context.sourceTitle} and paste to input fields`,
+          frequency: context.usageCount,
+          lastUsed: context.lastUsed,
+          confidence: Math.min(0.9, context.usageCount * 0.2),
+          suggestedActions: context.suggestedActions.map(action => action.type)
+        };
+        
+        rules.push(rule);
+      }
+    }
+    
+    console.log(`[${this.name}] Generated ${rules.length} LLM rules from clipboard patterns`);
+    return rules;
+  }
+
+  private derivePasteActionFromIntent(intent: string): string {
+    const lowerIntent = intent.toLowerCase();
+    
+    if (lowerIntent.includes('email') || lowerIntent.includes('contact')) {
+      return 'format_email';
+    } else if (lowerIntent.includes('url') || lowerIntent.includes('link')) {
+      return 'format_link';
+    } else if (lowerIntent.includes('code') || lowerIntent.includes('snippet')) {
+      return 'format_code';
+    } else if (lowerIntent.includes('form') || lowerIntent.includes('input')) {
+      return 'smart_paste';
+    }
+    
+    return 'paste';
   }
 
   async cleanup(): Promise<void> {

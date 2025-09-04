@@ -13,6 +13,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, classification_report
 from collections import Counter, defaultdict
 from scipy import stats
+from scipy.fftpack import dct
 import argparse
 import os
 import matplotlib.pyplot as plt
@@ -38,6 +39,8 @@ class PredictionExperiment:
     def __init__(self, cleaned_data_file: str):
         self.df = pd.read_csv(cleaned_data_file)
         self.results = {}
+        # 存储消融研究的结果
+        self.ablation_results = {}
         self.prepare_data()
 
     def prepare_data(self):
@@ -82,6 +85,96 @@ class PredictionExperiment:
         print(f"- Unique tokens: {len(self.df['enhanced_token'].unique())}")
         print(f"- Training sequences: {len(self.X_train) if hasattr(self, 'X_train') else 0}")
 
+    def extract_webfast_features(self, sequence):
+        """
+        提取WebFAST特征（模拟ml-worker.ts中的逻辑）
+        使用DCT变换提取时序特征
+        """
+        features = []
+        
+        # 时间特征 - 使用DCT变换
+        if len(sequence) > 1:
+            timestamps = [event.timestamp for event in sequence if hasattr(event, 'timestamp')]
+            if len(timestamps) > 1:
+                time_diffs = np.diff(timestamps)
+                if len(time_diffs) >= 3:
+                    # 对时间间隔序列进行DCT变换
+                    time_dct = dct(time_diffs[:min(10, len(time_diffs))], type=2, norm='ortho')
+                    features.extend(time_dct[:5])  # 取前5个DCT系数
+                else:
+                    features.extend([0] * 5)
+            else:
+                features.extend([0] * 5)
+        else:
+            features.extend([0] * 5)
+        
+        # 事件类型特征（使用hash编码）
+        type_hashes = []
+        for event in sequence:
+            event_type = getattr(event, 'enhanced_token', getattr(event, 'token', 'unknown'))
+            type_hash = hash(event_type) % 100  # 模拟ml-worker.ts中的hashString
+            type_hashes.append(type_hash)
+        
+        if type_hashes:
+            # 对类型序列也进行DCT变换
+            if len(type_hashes) >= 3:
+                type_dct = dct(type_hashes[:min(10, len(type_hashes))], type=2, norm='ortho')
+                features.extend(type_dct[:5])
+            else:
+                features.extend(type_hashes + [0] * (5 - len(type_hashes)))
+        else:
+            features.extend([0] * 5)
+        
+        # 序列统计特征
+        features.extend([
+            len(sequence),  # 序列长度
+            np.var(type_hashes) if type_hashes else 0,  # 类型方差
+            len(set(type_hashes)) if type_hashes else 0,  # 唯一类型数
+        ])
+        
+        # 标准化到固定长度
+        target_length = 13
+        if len(features) < target_length:
+            features.extend([0] * (target_length - len(features)))
+        
+        return np.array(features[:target_length])
+    
+    def extract_baseline_features(self, sequence):
+        """
+        提取基线特征（简单的统计特征，不使用DCT）
+        """
+        features = []
+        
+        # 简单的统计特征
+        features.extend([
+            len(sequence),  # 序列长度
+        ])
+        
+        # 事件类型的one-hot编码（简化版）
+        common_types = ['click', 'keydown', 'text_input', 'scroll', 'focus_change']
+        for event_type in common_types:
+            count = sum(1 for event in sequence 
+                       if event_type in getattr(event, 'enhanced_token', 
+                                               getattr(event, 'token', 'unknown')))
+            features.append(count / len(sequence))  # 归一化频率
+        
+        # 序列的简单统计
+        type_tokens = [getattr(event, 'enhanced_token', 
+                              getattr(event, 'token', 'unknown')) for event in sequence]
+        
+        features.extend([
+            len(set(type_tokens)),  # 唯一类型数
+            type_tokens.count('click') / len(sequence) if sequence else 0,  # 点击比例
+            type_tokens.count('keydown') / len(sequence) if sequence else 0,  # 按键比例
+        ])
+        
+        # 标准化到固定长度
+        target_length = 13
+        if len(features) < target_length:
+            features.extend([0] * (target_length - len(features)))
+        
+        return np.array(features[:target_length])
+    
     def create_sequences(self):
         """Create input-output sequence pairs"""
         tokens = self.df['enhanced_token'].tolist()
@@ -154,9 +247,9 @@ class PredictionExperiment:
         
         return metrics
     
-    def calculate_top_k_accuracy(self, y_pred_proba: list, y_true: list, k: int) -> float:
+    def calculate_top_k_accuracy(self, y_pred_proba, y_true: list, k: int) -> float:
         """计算Top-K准确率"""
-        if not y_pred_proba or len(y_pred_proba) == 0:
+        if y_pred_proba is None or len(y_pred_proba) == 0:
             return 0.0
         
         correct = 0
@@ -507,6 +600,168 @@ class PredictionExperiment:
         
         return accuracy
     
+    def run_transformer_model_with_ablation(self, use_webfast_features=True):
+        """
+        运行Transformer模型，支持消融研究
+        use_webfast_features=True: 使用WebFAST特征
+        use_webfast_features=False: 使用基线特征
+        """
+        if not HAS_TENSORFLOW:
+            feature_type = "WebFAST" if use_webfast_features else "Baseline"
+            print(f"\n--- 跳过Transformer模型消融研究 ({feature_type}) (需要TensorFlow) ---")
+            return 0
+        
+        feature_type = "WebFAST" if use_webfast_features else "Baseline"
+        print(f"\n--- Transformer模型消融研究 ({feature_type}特征) ---")
+        
+        # 准备特征数据
+        if use_webfast_features:
+            # 使用WebFAST特征重新处理序列
+            X_features = []
+            for seq_indices in self.X_train:
+                # 从索引重建序列对象（模拟）
+                sequence = [type('Event', (), {'token': self.id_to_token.get(idx, 'unknown'), 
+                                              'enhanced_token': self.id_to_token.get(idx, 'unknown'),
+                                              'timestamp': i * 1000})() 
+                           for i, idx in enumerate(seq_indices)]
+                features = self.extract_webfast_features(sequence)
+                X_features.append(features)
+            
+            X_test_features = []
+            for seq_indices in self.X_test:
+                sequence = [type('Event', (), {'token': self.id_to_token.get(idx, 'unknown'),
+                                              'enhanced_token': self.id_to_token.get(idx, 'unknown'),
+                                              'timestamp': i * 1000})() 
+                           for i, idx in enumerate(seq_indices)]
+                features = self.extract_webfast_features(sequence)
+                X_test_features.append(features)
+        else:
+            # 使用基线特征
+            X_features = []
+            for seq_indices in self.X_train:
+                sequence = [type('Event', (), {'token': self.id_to_token.get(idx, 'unknown'),
+                                              'enhanced_token': self.id_to_token.get(idx, 'unknown'),
+                                              'timestamp': i * 1000})() 
+                           for i, idx in enumerate(seq_indices)]
+                features = self.extract_baseline_features(sequence)
+                X_features.append(features)
+            
+            X_test_features = []
+            for seq_indices in self.X_test:
+                sequence = [type('Event', (), {'token': self.id_to_token.get(idx, 'unknown'),
+                                              'enhanced_token': self.id_to_token.get(idx, 'unknown'),
+                                              'timestamp': i * 1000})() 
+                           for i, idx in enumerate(seq_indices)]
+                features = self.extract_baseline_features(sequence)
+                X_test_features.append(features)
+        
+        X_features = np.array(X_features)
+        X_test_features = np.array(X_test_features)
+        
+        vocab_size = len(self.vocab)
+        feature_dim = X_features.shape[1]
+        embed_dim = 64
+        num_heads = 4
+        ff_dim = 128
+        
+        print("模型架构:")
+        print(f"- 词汇表大小: {vocab_size}")
+        print(f"- 特征维度: {feature_dim}")
+        print(f"- 嵌入维度: {embed_dim}")
+        print(f"- 注意力头数: {num_heads}")
+        print(f"- 前馈维度: {ff_dim}")
+        print(f"- 特征类型: {feature_type}")
+        
+        # 构建适应特征输入的Transformer模型
+        inputs = Input(shape=(feature_dim,))
+        
+        # 特征嵌入层
+        embedding_layer = Dense(embed_dim, activation='relu')(inputs)
+        embedding_layer = tf.expand_dims(embedding_layer, axis=1)  # 添加序列维度
+        
+        # Transformer block
+        attention_output = MultiHeadAttention(
+            num_heads=num_heads, key_dim=embed_dim
+        )(embedding_layer, embedding_layer)
+        
+        # Add & Norm
+        attention_output = LayerNormalization(epsilon=1e-6)(embedding_layer + attention_output)
+        
+        # Feed Forward
+        ffn_output = Dense(ff_dim, activation="relu")(attention_output)
+        ffn_output = Dense(embed_dim)(ffn_output)
+        
+        # Add & Norm  
+        ffn_output = LayerNormalization(epsilon=1e-6)(attention_output + ffn_output)
+        
+        # Global average pooling
+        sequence_output = GlobalAveragePooling1D()(ffn_output)
+        
+        # Dropout and classification
+        sequence_output = Dropout(0.3)(sequence_output)
+        outputs = Dense(vocab_size, activation="softmax")(sequence_output)
+        
+        model = Model(inputs=inputs, outputs=outputs)
+        
+        model.compile(
+            optimizer=tf.keras.optimizers.Adam(learning_rate=0.001),
+            loss="sparse_categorical_crossentropy",
+            metrics=["accuracy"]
+        )
+        
+        # 训练模型
+        early_stopping = EarlyStopping(
+            monitor='val_loss', 
+            patience=5, 
+            restore_best_weights=True,
+            min_delta=0.001
+        )
+        
+        history = model.fit(
+            X_features, self.y_train,
+            epochs=30,
+            batch_size=min(16, len(X_features)//4),
+            validation_split=0.2,
+            callbacks=[early_stopping],
+            verbose=1
+        )
+        
+        # 评估模型
+        y_pred_proba = model.predict(X_test_features, verbose=0)
+        y_pred_transformer = np.argmax(y_pred_proba, axis=1)
+        
+        accuracy = accuracy_score(self.y_test, y_pred_transformer)
+        
+        # 计算增强评估指标
+        enhanced_metrics = self.evaluate_enhanced_metrics(f'transformer_{feature_type.lower()}', y_pred_transformer, y_pred_proba)
+        
+        # 存储消融研究结果
+        model_key = f'transformer_{feature_type.lower()}'
+        self.ablation_results[model_key] = {
+            'accuracy': accuracy,
+            'feature_type': feature_type,
+            'epochs_trained': len(history.history['loss']),
+            'final_loss': history.history['loss'][-1],
+            'final_val_loss': history.history['val_loss'][-1] if 'val_loss' in history.history else None,
+            'num_heads': num_heads,
+            'embed_dim': embed_dim,
+            'ff_dim': ff_dim,
+            **enhanced_metrics
+        }
+        
+        print(f"训练轮数: {len(history.history['loss'])}")
+        print(f"最终损失: {history.history['loss'][-1]:.4f}")
+        if 'val_loss' in history.history:
+            print(f"最终验证损失: {history.history['val_loss'][-1]:.4f}")
+        print(f"Top-1 准确率: {accuracy:.3f}")
+        print(f"Top-3 准确率: {enhanced_metrics['top_3_accuracy']:.3f}")
+        print(f"Top-5 准确率: {enhanced_metrics['top_5_accuracy']:.3f}")
+        print(f"新颖性分数: {enhanced_metrics['novelty']:.3f}")
+        print(f"多样性分数: {enhanced_metrics['diversity']:.3f}")
+        print(f"覆盖率: {enhanced_metrics['coverage']:.3f}")
+        
+        return accuracy
+    
     def run_transformer_model(self):
         """训练并评估Transformer模型"""
         if not HAS_TENSORFLOW:
@@ -637,6 +892,139 @@ class PredictionExperiment:
         for token, count in token_dist.most_common(5):
             print(f"  {token}: {count}次 ({count/len(self.y_train):.1%})")
 
+    def run_ablation_study(self):
+        """
+        运行消融研究：比较WebFAST特征 vs 基线特征的Transformer模型性能
+        """
+        print("\n" + "="*60)
+        print("消融研究: WebFAST特征 vs 基线特征")
+        print("="*60)
+        
+        # 运行带WebFAST特征的Transformer
+        webfast_acc = self.run_transformer_model_with_ablation(use_webfast_features=True)
+        
+        # 运行带基线特征的Transformer
+        baseline_acc = self.run_transformer_model_with_ablation(use_webfast_features=False)
+        
+        # 分析结果
+        self.analyze_ablation_results()
+    
+    def analyze_ablation_results(self):
+        """
+        分析消融研究结果
+        """
+        print("\n" + "="*50)
+        print("消融研究结果分析")
+        print("="*50)
+        
+        if 'transformer_webfast' not in self.ablation_results or 'transformer_baseline' not in self.ablation_results:
+            print("消融研究数据不完整，无法进行分析")
+            return
+        
+        webfast_results = self.ablation_results['transformer_webfast']
+        baseline_results = self.ablation_results['transformer_baseline']
+        
+        webfast_acc = webfast_results['accuracy']
+        baseline_acc = baseline_results['accuracy']
+        
+        print(f"\n📊 准确率对比:")
+        print(f"  Transformer (WebFAST特征):    {webfast_acc:.4f}")
+        print(f"  Transformer (基线特征):       {baseline_acc:.4f}")
+        
+        if baseline_acc > 0:
+            improvement = (webfast_acc - baseline_acc) / baseline_acc * 100
+            print(f"  WebFAST相对提升:             {improvement:+.1f}%")
+        
+        print(f"\n📈 详细指标对比:")
+        metrics_to_compare = ['top_3_accuracy', 'top_5_accuracy', 'novelty', 'diversity', 'coverage']
+        
+        for metric in metrics_to_compare:
+            webfast_val = webfast_results.get(metric, 0)
+            baseline_val = baseline_results.get(metric, 0)
+            
+            if baseline_val > 0:
+                improvement = (webfast_val - baseline_val) / baseline_val * 100
+                print(f"  {metric}: WebFAST={webfast_val:.3f}, 基线={baseline_val:.3f}, 提升={improvement:+.1f}%")
+            else:
+                print(f"  {metric}: WebFAST={webfast_val:.3f}, 基线={baseline_val:.3f}")
+        
+        # 训练效率对比
+        print(f"\n⏱️ 训练效率对比:")
+        print(f"  WebFAST训练轮数: {webfast_results.get('epochs_trained', 0)}")
+        print(f"  基线训练轮数:    {baseline_results.get('epochs_trained', 0)}")
+        print(f"  WebFAST最终损失: {webfast_results.get('final_loss', 0):.4f}")
+        print(f"  基线最终损失:    {baseline_results.get('final_loss', 0):.4f}")
+        
+        # 结论
+        print(f"\n🎯 消融研究结论:")
+        if webfast_acc > baseline_acc * 1.05:  # 5%以上的提升
+            print(f"  ✅ WebFAST特征显著优于基线特征")
+            print(f"  ✅ DCT变换有效捕捉了时序模式")
+            print(f"  ✅ 性能提升主要来源于WebFAST表示法")
+        elif webfast_acc > baseline_acc:
+            print(f"  ✅ WebFAST特征略优于基线特征")
+            print(f"  ⚠️  提升幅度较小，可能需要更多数据验证")
+        else:
+            print(f"  ❌ WebFAST特征未显示明显优势")
+            print(f"  ⚠️  可能需要调优特征提取或模型架构")
+    
+    def visualize_ablation_results(self):
+        """
+        可视化消融研究结果
+        """
+        if not self.ablation_results:
+            return
+        
+        fig, axes = plt.subplots(1, 2, figsize=(15, 6))
+        
+        # 准确率对比
+        models = ['WebFAST特征', '基线特征']
+        webfast_acc = self.ablation_results.get('transformer_webfast', {}).get('accuracy', 0)
+        baseline_acc = self.ablation_results.get('transformer_baseline', {}).get('accuracy', 0)
+        accuracies = [webfast_acc, baseline_acc]
+        
+        colors = ['#4CAF50', '#FF9800']  # 绿色为WebFAST，橙色为基线
+        bars1 = axes[0].bar(models, accuracies, color=colors, alpha=0.8)
+        axes[0].set_title('消融研究: Transformer模型准确率对比', fontsize=14, fontweight='bold')
+        axes[0].set_ylabel('准确率')
+        axes[0].set_ylim(0, max(accuracies) * 1.2)
+        
+        # 添加数值标签
+        for bar, acc in zip(bars1, accuracies):
+            axes[0].text(bar.get_x() + bar.get_width()/2, bar.get_height() + max(accuracies)*0.01,
+                        f'{acc:.3f}', ha='center', va='bottom', fontweight='bold')
+        
+        axes[0].grid(True, alpha=0.3, axis='y')
+        
+        # 多指标雷达图对比
+        if len(self.ablation_results) >= 2:
+            metrics = ['accuracy', 'top_3_accuracy', 'diversity', 'coverage']
+            metric_labels = ['Top-1准确率', 'Top-3准确率', '多样性', '覆盖率']
+            
+            webfast_values = [self.ablation_results.get('transformer_webfast', {}).get(m, 0) for m in metrics]
+            baseline_values = [self.ablation_results.get('transformer_baseline', {}).get(m, 0) for m in metrics]
+            
+            x_pos = np.arange(len(metric_labels))
+            width = 0.35
+            
+            axes[1].bar(x_pos - width/2, webfast_values, width, label='WebFAST特征', color='#4CAF50', alpha=0.8)
+            axes[1].bar(x_pos + width/2, baseline_values, width, label='基线特征', color='#FF9800', alpha=0.8)
+            
+            axes[1].set_title('多指标性能对比', fontsize=14, fontweight='bold')
+            axes[1].set_ylabel('得分')
+            axes[1].set_xticks(x_pos)
+            axes[1].set_xticklabels(metric_labels, rotation=45, ha='right')
+            axes[1].legend()
+            axes[1].grid(True, alpha=0.3, axis='y')
+        
+        plt.tight_layout()
+        
+        # 保存图片
+        output_file = 'experiment_2_ablation_study.png'
+        plt.savefig(output_file, dpi=300, bbox_inches='tight')
+        print(f"\n消融研究结果图表已保存至 {output_file}")
+        plt.show()
+    
     def visualize_results(self):
         """Visualize experiment results"""
         if not self.results:
@@ -732,10 +1120,35 @@ class PredictionExperiment:
                     f'{ent:.2f}', ha='center', va='bottom')
         plt.grid(True, alpha=0.3)
         
-        # Chart F: Best Model Comprehensive Metrics
+        # Chart F: 消融研究结果（如果有的话）
         plt.subplot(2, 3, 6)
-        if self.results:
-            # 找到准确率最高的模型
+        if self.ablation_results and len(self.ablation_results) >= 2:
+            # 显示消融研究结果
+            webfast_acc = self.ablation_results.get('transformer_webfast', {}).get('accuracy', 0)
+            baseline_acc = self.ablation_results.get('transformer_baseline', {}).get('accuracy', 0)
+            
+            models = ['WebFAST\n特征', '基线\n特征']
+            accuracies = [webfast_acc, baseline_acc]
+            colors = ['#4CAF50', '#FF9800']
+            
+            bars = plt.bar(models, accuracies, color=colors, alpha=0.8)
+            plt.title('(F) 消融研究: 特征对比', fontweight='bold')
+            plt.ylabel('准确率')
+            
+            # 添加数值标签和提升百分比
+            for bar, acc in zip(bars, accuracies):
+                plt.text(bar.get_x() + bar.get_width()/2, bar.get_height() + max(accuracies)*0.01,
+                        f'{acc:.3f}', ha='center', va='bottom', fontweight='bold')
+            
+            if baseline_acc > 0:
+                improvement = (webfast_acc - baseline_acc) / baseline_acc * 100
+                plt.text(0.5, 0.8, f'提升: {improvement:+.1f}%', 
+                        transform=plt.gca().transAxes, ha='center',
+                        bbox=dict(boxstyle="round,pad=0.3", facecolor="yellow", alpha=0.7))
+            
+            plt.grid(True, alpha=0.3)
+        elif self.results:
+            # 显示最佳模型的综合指标（原有逻辑）
             best_model = max(self.results.keys(), key=lambda k: self.results[k]['accuracy'])
             best_metrics = self.results[best_model]
             
@@ -864,8 +1277,11 @@ class PredictionExperiment:
                 best_model, best_acc = sorted_models[0]
                 if len(sorted_models) > 1:
                     second_model, second_acc = sorted_models[1]
-                    improvement = (best_acc / second_acc - 1) * 100
-                    print(f"  → {best_model.upper()}性能最佳，比{second_model.upper()}高{improvement:.1f}%")
+                    if second_acc > 0:
+                        improvement = (best_acc / second_acc - 1) * 100
+                        print(f"  → {best_model.upper()}性能最佳，比{second_model.upper()}高{improvement:.1f}%")
+                    else:
+                        print(f"  → {best_model.upper()}性能最佳 ({best_acc:.3f})，{second_model.upper()}未能训练成功")
                     
                 if best_acc > baseline_acc * 1.1:
                     print(f"- 深度学习模型({best_model.upper()})显示出优势，建议进一步优化")
@@ -932,10 +1348,21 @@ def main():
             exp.run_gru_model()
         if not args.skip_transformer:
             exp.run_transformer_model()
+        
+        # 运行消融研究
+        print("\n" + "="*60)
+        print("开始消融研究...")
+        print("="*60)
+        exp.run_ablation_study()
     
     # 分析和可视化
     exp.analyze_prediction_patterns()
     exp.visualize_results()
+    
+    # 可视化消融研究结果
+    if exp.ablation_results:
+        exp.visualize_ablation_results()
+    
     exp.generate_report()
 
 if __name__ == "__main__":
