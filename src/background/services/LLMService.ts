@@ -511,13 +511,53 @@ Focus on creating realistic variations that a user might perform for the same ta
   }
 
   /**
-   * Extract variations from LLM response text
+   * Extract variations from LLM response text with robust JSON parsing
    */
-  private extractVariationsFromResponse(_responseText: string, originalSequence: any[], intent: string): any[] {
-    // This is a simplified extraction - in practice, you might want more robust parsing
+  private extractVariationsFromResponse(responseText: string, originalSequence: any[], intent: string): any[] {
     const variations = [];
     
-    // For now, create simple variations based on the original sequence
+    try {
+      // First, try to extract JSON arrays from the response
+      const jsonMatches = responseText.match(/\[[^\]]*\]/gs);
+      
+      if (jsonMatches && jsonMatches.length > 0) {
+        for (const match of jsonMatches) {
+          try {
+            const parsedVariations = JSON.parse(match);
+            if (Array.isArray(parsedVariations)) {
+              // Validate and normalize the parsed variations
+              for (const variation of parsedVariations.slice(0, 2)) { // Limit to 2 variations
+                if (this.validateVariationStructure(variation)) {
+                  variations.push(this.normalizeVariation(variation, originalSequence, intent));
+                }
+              }
+            }
+          } catch (parseError) {
+            console.warn('[LLMService] Failed to parse individual JSON match:', parseError);
+            continue;
+          }
+        }
+      }
+      
+      // If we successfully parsed variations, return them
+      if (variations.length > 0) {
+        console.log(`[LLMService] Successfully extracted ${variations.length} variations from LLM response`);
+        return variations;
+      }
+      
+      // Fallback: try to extract key-value patterns
+      const keyValuePatterns = this.extractKeyValuePatterns(responseText, originalSequence, intent);
+      if (keyValuePatterns.length > 0) {
+        variations.push(...keyValuePatterns);
+        return variations;
+      }
+      
+    } catch (error) {
+      console.warn('[LLMService] Error during LLM response parsing:', error);
+    }
+    
+    // Final fallback: create simple variations
+    console.log('[LLMService] Falling back to simple variation generation');
     for (let i = 0; i < 2; i++) {
       const variation = {
         sequence: originalSequence.map((event: any) => ({
@@ -539,6 +579,117 @@ Focus on creating realistic variations that a user might perform for the same ta
       };
       
       variations.push(variation);
+    }
+    
+    return variations;
+  }
+
+  /**
+   * Validate the structure of a parsed variation from LLM response
+   */
+  private validateVariationStructure(variation: any): boolean {
+    if (!variation || typeof variation !== 'object') {
+      return false;
+    }
+    
+    // Check if it has required properties or is a valid sequence-like structure
+    if (Array.isArray(variation)) {
+      return variation.length > 0 && variation.every(item => 
+        item && typeof item === 'object' && (item.type || item.action)
+      );
+    }
+    
+    // Check if it's a single event object
+    return !!(variation.type || variation.action || variation.sequence);
+  }
+
+  /**
+   * Normalize a parsed variation to match our expected structure
+   */
+  private normalizeVariation(variation: any, originalSequence: any[], intent: string): any {
+    let sequence = [];
+    
+    if (Array.isArray(variation)) {
+      sequence = variation.map((event: any, index: number) => ({
+        type: event.type || event.action || 'action',
+        timestamp: Date.now() + (index * 100),
+        context: event.context || originalSequence[index]?.context || {},
+        payload: {
+          features: {
+            ...event.features,
+            llmIntent: intent,
+            synthetic: true,
+            textContent: event.text || event.textContent || ''
+          }
+        }
+      }));
+    } else if (variation.sequence) {
+      sequence = variation.sequence;
+    } else {
+      // Single event, wrap in array
+      sequence = [{
+        type: variation.type || variation.action || 'action',
+        timestamp: Date.now(),
+        context: variation.context || {},
+        payload: {
+          features: {
+            llmIntent: intent,
+            synthetic: true,
+            textContent: variation.text || ''
+          }
+        }
+      }];
+    }
+    
+    return {
+      sequence: sequence,
+      intent: intent,
+      confidence: 0.8,
+      source: 'llm_parsed_variation'
+    };
+  }
+
+  /**
+   * Extract key-value patterns from unstructured LLM response
+   */
+  private extractKeyValuePatterns(responseText: string, originalSequence: any[], intent: string): any[] {
+    const variations = [];
+    
+    try {
+      // Look for numbered lists or bullet points
+      const listMatches = responseText.match(/(?:^\d+\.|^[-*•])\s*(.+)$/gm);
+      
+      if (listMatches && listMatches.length > 0) {
+        for (let i = 0; i < Math.min(2, listMatches.length); i++) {
+          const item = listMatches[i].replace(/^(?:\d+\.|[-*•])\s*/, '').trim();
+          
+          if (item.length > 10) { // Only consider substantial content
+            const variation = {
+              sequence: originalSequence.map((event: any, index: number) => ({
+                ...event,
+                timestamp: Date.now() + (i * 1000) + (index * 100),
+                payload: {
+                  ...event.payload,
+                  features: {
+                    ...event.payload.features,
+                    llmIntent: intent,
+                    synthetic: true,
+                    variationIndex: i,
+                    extractedText: item
+                  }
+                }
+              })),
+              intent: intent,
+              confidence: 0.6,
+              source: 'llm_pattern_extraction'
+            };
+            
+            variations.push(variation);
+          }
+        }
+      }
+    } catch (error) {
+      console.warn('[LLMService] Failed to extract key-value patterns:', error);
     }
     
     return variations;

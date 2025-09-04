@@ -92,7 +92,7 @@ export class ClipboardEnhancerPlugin extends BasePlugin {
     if (clipboardData && clipboardData.operation === 'copy' && clipboardData.text) {
       // Create enhanced clipboard context
       const context: ClipboardContext = {
-        id: `clip_${Date.now()}_${Math.random().toString(36).substring(2, 2 + Config.ClipboardEnhancer.CLIPBOARD_ID_RANDOM_LENGTH)}`,  
+        id: `clip_${Date.now()}_${this.generateSecureId()}`,  
         copiedText: clipboardData.text,
         sourceUrl: event.url || '',
         sourceTitle: event.pageTitle || '',
@@ -473,6 +473,24 @@ export class ClipboardEnhancerPlugin extends BasePlugin {
       await this.context.dataStorage.set('clipboardHistory', JSON.stringify(history));
     } catch (error) {
       console.warn(`[${this.name}] Failed to save clipboard history:`, error);
+    }
+  }
+
+  /**
+   * Generate a cryptographically secure ID for clipboard context
+   */
+  private generateSecureId(): string {
+    try {
+      // Use crypto.getRandomValues for secure random number generation
+      const randomValues = new Uint32Array(2);
+      crypto.getRandomValues(randomValues);
+      
+      // Convert to base36 for compact representation
+      return randomValues[0].toString(36) + randomValues[1].toString(36);
+    } catch (error) {
+      // Fallback to timestamp-based ID if crypto is not available
+      console.warn(`[${this.name}] Crypto not available, using fallback ID generation:`, error);
+      return `fallback_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
     }
   }
 
