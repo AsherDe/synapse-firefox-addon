@@ -285,7 +285,7 @@ export class DataStorage {
   private clearAllPendingWrites(): void {
     this.pendingWrites.clear();
     
-    this.writeTimers.forEach(timer => clearTimeout(timer));
+    this.writeTimers.forEach((timer) => { clearTimeout(timer); });
     this.writeTimers.clear();
   }
 }
